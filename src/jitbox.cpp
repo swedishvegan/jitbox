@@ -1,6 +1,6 @@
 
 #include "./jitbox.hpp"
-#include "../../complax/util/Timer.hpp"
+#include "./Timer.hpp"
 
 using namespace jitbox;
 #include <iostream>

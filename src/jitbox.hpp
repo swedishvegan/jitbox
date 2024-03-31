@@ -1,6 +1,353 @@
 #ifndef JITBOX_HPP
 #define JITBOX_HPP
 
+#include <cstdint>
+#include <vector>
+#include <cstring>
+#include "./internal/ptr.hpp"
+
+namespace _jitbox {
+
+    using u8 = uint8_t;
+    using i8 = int8_t;
+    using u16 = uint16_t;
+    using i16 = int16_t;
+    using u32 = uint32_t;
+    using i32 = int32_t;
+    using u64 = uint64_t;
+    using i64 = int64_t;
+    using f32 = float;
+    using f64 = double;
+
+    template <typename T>
+    using vec = std::vector<T>;
+
+    template <typename T>
+    using map = std::map<T>;
+
+    using ssavariable = u16;                                                // identifier for a single static assignment (ssa) variable within a function
+
+    template <typename ptrtype>
+    struct ptr;
+
+    enum opcode : u8 {                                                      // bytecode instruction set
+
+        begfnc,                                                             // arguments: 1, purpose: marks the beginning of a function
+        endfnc,                                                             // arguments: 0, purpose: marks the end of a function 
+        alias,                                                              // arguments: 2, purpose: marks arg1 as the owner of arg2, so that changes in arg2 are reflected in arg1
+        farg,                                                               // arguments: 1, purpose: marks arg1 as an argument in a function call
+        regarg,                                                             // arguments: 1, purpose: tells the JIT that arg1 is an argument and does not need to be allocated because the caller already allocated it (its runtime address is inferred by the order that these instructions are generated)
+        rhint,                                                              // arguments: 2, purpose: hints to the JIT to try to allocate arg1 in argument register arg2
+        hot,                                                                // arguments: 1, purpose: hints to the JIT that arg1 should be placed in a register
+        beglp,                                                              // arguments: 0, purpose: marks the beginning of loop mode
+        endlp,                                                              // arguments: 0, purpose: marks the end of loop mode
+        rfree,                                                              // arguments: 1, purpose: tells the JIT that arg1 is no longer in use and its address can be used by another live variable
+        exit,                                                               // arguments: 0, purpose: terminates the program with code 0
+        j,                                                                  // arguments: 1, purpose: sets the IP to arg1
+        jz,                                                                 // arguments: 2, purpose: sets the IP to arg1 iff arg2 == 0
+        jnz,                                                                // arguments: 2, purpose: sets the IP to arg1 iff arg2 != 0
+        je,                                                                 // arguments: 3, purpose: sets the IP to arg1 iff arg2 == arg3
+        jne,                                                                // arguments: 3, purpose: sets the IP to arg1 iff arg2 != arg3
+        jg,                                                                 // arguments: 3, purpose: sets the IP to arg1 iff arg2 > arg3
+        jge,                                                                // arguments: 3, purpose: sets the IP to arg1 iff arg2 >= arg3
+        callv,                                                              // arguments: 1, purpose: calls the function arg1
+        call,                                                               // arguments: 2, purpose: calls the function arg1 and stores the result in arg2
+        retv,                                                               // arguments: 0, purpose: sets the IP to the value on top of the stack
+        ret,                                                                // arguments: 1, purpose: moves arg1 into the return register and sets the IP to the value on top of the stack
+        halloc,                                                             // arguments: 2, purpose: allocates arg1 bytes on the heap and sets arg2 to the new allocated address
+        hinit,                                                              // arguments: 2, purpose: allocates arg1 bytes on the heap, zeros the newly allocated memory, and sets arg2 to the new allocated address
+        copy,                                                               // arguments: 3, purpose: copies arg1 bytes from arg2 into arg3 
+        mov,                                                                // arguments: 2, purpose: moves the value of arg1 into arg2
+        movz,                                                               // arguments: 4, purpose: moves the value of either arg1 or arg2 into arg3 depending on whether arg4 == 0
+        movnz,                                                              // arguments: 4, purpose: moves the value of either arg1 or arg2 into arg3 depending on whether arg4 != 0
+        move,                                                               // arguments: 5, purpose: moves the value of either arg1 or arg2 into arg3 depending on whether arg4 == arg5
+        movne,                                                              // arguments: 5, purpose: moves the value of either arg1 or arg2 into arg3 depending on whether arg4 != arg5
+        movg,                                                               // arguments: 5, purpose: moves the value of either arg1 or arg2 into arg3 depending on whether arg4 > arg5
+        movge,                                                              // arguments: 5, purpose: moves the value of either arg1 or arg2 into arg3 depending on whether arg4 >= arg5
+        ref,                                                                // arguments: 2, purpose: moves the address of arg1 into arg2
+        deref,                                                              // arguments: 2, purpose: moves the value in the address referenced by arg1 into arg2
+        objlen,                                                             // arguments: 2, purpose: moves the byte size of the heap object at the address referenced by arg1 into arg2
+        cast,                                                               // arguments: 2, purpose: casts arg1 to a new type and stores the result in arg2
+        add,                                                                // arguments: 3, purpose: stores the sum of arg1 and arg2 in arg3
+        sub,                                                                // arguments: 3, purpose: stores the difference of arg1 and arg2 in arg3
+        mul,                                                                // arguments: 3, purpose: stores the product of arg1 and arg2 in arg3
+        div,                                                                // arguments: 3, purpose: stores the quotient of arg1 and arg2 in arg3
+        mod,                                                                // arguments: 3, purpose: stores the remainder of dividing arg1 by arg2 in arg3
+        band,                                                               // arguments: 3, purpose: stores the bitwise AND of arg1 and arg2 in arg3
+        bor,                                                                // arguments: 3, purpose: stores the bitwise OR of arg1 and arg2 in arg3
+        bxor,                                                               // arguments: 3, purpose: stores the bitwise XOR of arg1 and arg2 in arg3
+        bnot,                                                               // arguments: 2, purpose: stores the bitwise NOT of arg1 in arg2
+        zero,                                                               // arguments: 2, purpose: stores the boolean value arg1 == 0 in arg2
+        nzero,                                                              // arguments: 2, purpose: stores the boolean value arg1 != 0 in arg2
+        eq,                                                                 // arguments: 3, purpose: stores the boolean value arg1 == arg2 in arg3
+        neq,                                                                // arguments: 3, purpose: stores the boolean value arg1 != arg2 in arg3
+        gt,                                                                 // arguments: 3, purpose: stores the boolean value arg1 > arg2 in arg3
+        gte,                                                                // arguments: 3, purpose: stores the boolean value arg1 >= arg2 in arg3
+        shl,                                                                // arguments: 3, purpose: stores the bitwise left-shift of arg1 by arg2 in arg3
+        shr,                                                                // arguments: 3, purpose: stores the bitwise right-shift of arg1 by arg2 in arg3
+        rotl,                                                               // arguments: 3, purpose: stores the bitwise left-rotation of arg1 by arg2 in arg3
+        rotr,                                                               // arguments: 3, purpose: stores the bitwise right-rotation of arg1 by arg2 in arg3
+        _length                                                             // number of instructions
+
+    };
+
+    extern const u8 instructionlengths[];
+    extern const char* instructionnames[];
+           
+    struct compilerobject {                                                 // base class for instruction, variable, and codeblock -- the three top-level objects that make up the jitbox intermediate representation
+
+        enum class cotype : u8 { instruction, variable, codeblock } type;
+        u32 index = 0;                                                      // offset of this object within its parent codeblock if this object is an instruction or codeblock; ignored if this object is a variable
+
+        inline compilerobject(cotype type) : type(type) { }
+
+    };
+
+    using pcompilerobject = ptr<compilerobject>;
+
+    struct variable;
+
+    struct instruction : public compilerobject {                            // intermediate representation for a single instruction; consists of an opcode and an array of instructions
+
+        static const u8 maxnumargs = 5;                                     // maximum number of arguments of any instruction
+        opcode op;           
+        ssavariable args[maxnumargs];
+        
+        inline instruction(opcode op, ssavariable* srcargs) : compilerobject(compilerobject::cotype::instruction), op(op) { std::memcpy(args, srcargs, sizeof(ssavariable) * instructionlengths[op]); }
+
+    };
+
+    using pinstruction = ptr<instruction>;
+
+    struct variable : public compilerobject {
+
+        ssavariable id;
+
+        inline variable(ssavariable id) : compilerobject(compilerobject::cotype::variable), id(id) { }
+
+    };
+
+    using pvariable = ptr<variable>;
+
+    struct codeblock;
+    using pcodeblock = ptr<codeblock>;
+
+    struct codeblock : public compilerobject {
+
+        vec<pcompilerobject> code;
+        vec<pvariable>* variables;                                          // contains all variables in the function that this codeblock belongs to; memory is allocated and deleted by the top-level scope codeblock
+
+        enum class cbtype : u8 {
+
+            function,                                                       // this codeblock is the top-level scope of a function
+            child,                                                          // this codeblock is a child scope of a function
+            loop,                                                           // this codeblock contains an instruction (loop condition) and a child codeblock (loop body) 
+            conditional                                                     // this codeblock contains an instruction (if condition), a child codeblock (if body), and an optional second child codeblock (else body)
+
+        } blocktype;
+
+        inline codeblock(cbtype blocktype) : compilerobject(compilerobject::cotype::codeblock), blocktype(blocktype) { if (blocktype == cbtype::function) variables = new vec<pvariable>(); }
+        inline ~codeblock() { if (blocktype == cbtype::function) delete variables; }
+
+        inline static pcodeblock makefunction();
+        inline static pcodeblock makechild();
+        inline static pcodeblock makeloop();
+        inline static pcodeblock makeconditional();
+
+    };
+
+    struct context {
+
+        vec<pcodeblock> functions;
+
+    };
+
+    /**
+        below is a simple smart pointer implementation I wrote a long time ago before
+        I knew that std smart pointers were a thing; I still use it just out of nostalgia
+    **/
+
+    template <int _>
+    struct ptrcontainerbase {
+
+        const void* p = nullptr;
+        int refcount = 0;
+
+        inline ptrcontainerbase(const void*);
+
+    };
+
+    using ptrcontainer = ptrcontainerbase<0>;
+
+    template <typename ptrtype>
+    struct ptr {
+
+        template <typename casttype>
+        inline ptr<casttype> cast();
+
+        inline ptr();
+        inline ptr(const ptr&);
+        inline ptr(const ptrtype*);
+
+        inline void operator = (const ptr&);
+        inline void operator = (const ptrtype*);
+
+        inline ptrtype* operator -> () const;
+        inline ptrtype& operator * () const;
+
+        inline ptrtype* operator () () const;
+
+        inline bool operator == (const ptr&) const;
+        inline bool operator == (ptrtype*) const;
+
+        inline bool operator != (const ptr&) const;
+        inline bool operator != (ptrtype*) const;
+
+        inline bool operator >= (const ptr&) const;
+        inline bool operator >= (ptrtype*) const;
+
+        inline bool operator <= (const ptr&) const;
+        inline bool operator <= (ptrtype*) const;
+
+        inline bool operator > (const ptr&) const;
+        inline bool operator > (ptrtype*) const;
+
+        inline bool operator < (const ptr&) const;
+        inline bool operator < (ptrtype*) const;
+
+        inline  ~ptr();
+
+    protected:
+
+        ptrcontainer* ptrcnt = nullptr;
+
+        inline ptr(ptrcontainer*, void*);
+
+        inline void copy(const ptr&);
+        inline void init(const ptrtype*);
+        inline void cleanup();
+
+        template <typename friendtype>
+        friend struct ptr;
+
+    };
+
+    template <int _>
+    inline ptrcontainerbase<_>::ptrcontainerbase(const void* p) : p(p) { }
+
+    template <typename ptrtype>
+    template <typename casttype>
+    inline ptr<casttype> ptr<ptrtype>::cast() { return ptrcnt ? ptr<casttype>(ptrcnt, nullptr) : ptr<casttype>(); }
+
+    template <typename ptrtype>
+    inline ptr<ptrtype>::ptr() { init(nullptr); }
+
+    template <typename ptrtype>
+    inline ptr<ptrtype>::ptr(const ptr& ptr) { copy(ptr); }
+
+    template <typename ptrtype>
+    inline ptr<ptrtype>::ptr(const ptrtype* ptr) { init(ptr); }
+
+    template <typename ptrtype>
+    inline void ptr<ptrtype>::operator = (const ptr& ptr) { cleanup(); copy(ptr); }
+
+    template <typename ptrtype>
+    inline void ptr<ptrtype>::operator = (const ptrtype* ptr) { cleanup(); init(ptr); }
+
+    template <typename ptrtype>
+    inline ptrtype* ptr<ptrtype>::operator -> () const { return (ptrtype*)ptrcnt->p; }
+
+    template <typename ptrtype>
+    inline ptrtype& ptr<ptrtype>::operator * () const { return *(ptrtype*)(ptrcnt->p); }
+
+    template <typename ptrtype>
+    inline ptrtype* ptr<ptrtype>::operator () () const { if (ptrcnt) if (ptrcnt->p) return (ptrtype*)ptrcnt->p; return nullptr; }
+
+    template <typename ptrtype>
+    inline bool ptr<ptrtype>::operator == (const ptr& rh) const { return ptrcnt ? (rh.ptrcnt ? ptrcnt->p == rh.ptrcnt->p : false) : !rh.ptrcnt; }
+
+    template <typename ptrtype>
+    inline bool ptr<ptrtype>::operator == (ptrtype* rh) const { return ptrcnt ? ptrcnt->p == rh : !rh; }
+
+    template <typename ptrtype>
+    inline bool ptr<ptrtype>::operator != (const ptr& rh) const { return ptrcnt ? (rh.ptrcnt ? ptrcnt->p != rh.ptrcnt->p : true) : (bool)rh.ptrcnt; }
+
+    template <typename ptrtype>
+    inline bool ptr<ptrtype>::operator != (ptrtype* rh) const { return ptrcnt ? ptrcnt->p != rh : (bool)rh; }
+
+    template <typename ptrtype>
+    inline bool ptr<ptrtype>::operator >= (const ptr& rh) const {
+
+        if (!ptrcnt && !rh.ptrcnt) return true;
+        if (!ptrcnt && rh.ptrcnt) return false;
+        if (ptrcnt && !rh.ptrcnt) return true;
+        return ptrcnt->p >= rh.ptrcnt->p;
+
+    }
+
+    template <typename ptrtype>
+    inline bool ptr<ptrtype>::operator >= (ptrtype* rh) const { if (!ptrcnt && rh) return false; return ptrcnt->p >= (const void*)rh; }
+
+    template <typename ptrtype>
+    inline bool ptr<ptrtype>::operator <= (const ptr& rh) const { return rh >= *this; }
+
+    template <typename ptrtype>
+    inline bool ptr<ptrtype>::operator <= (ptrtype* rh) const { if (!ptrcnt && rh) return true; return ptrcnt->p <= (const void*)rh; }
+
+    template <typename ptrtype>
+    inline bool ptr<ptrtype>::operator > (const ptr& rh) const {
+
+        if (!ptrcnt && !rh.ptrcnt) return false;
+        if (!ptrcnt && rh.ptrcnt) return false;
+        if (ptrcnt && !rh.ptrcnt) return true;
+        return ptrcnt->p > rh.ptrcnt->p;
+
+    }
+
+    template <typename ptrtype>
+    inline bool ptr<ptrtype>::operator > (ptrtype* rh) const { if (!ptrcnt && rh) return false; return ptrcnt->p > (const void*)rh; }
+
+    template <typename ptrtype>
+    inline bool ptr<ptrtype>::operator < (const ptr& rh) const { return rh > *this; }
+
+    template <typename ptrtype>
+    inline bool ptr<ptrtype>::operator < (ptrtype* rh) const { if (!ptrcnt && rh) return true; return ptrcnt->p < (const void*)rh; }
+
+    template <typename ptrtype>
+    inline ptr<ptrtype>::~ptr() { cleanup(); }
+
+    template <typename ptrtype>
+    inline ptr<ptrtype>::ptr(ptrcontainer* ptrcnt, void*) : ptrcnt(ptrcnt) { ptrcnt->refcount++; }
+
+    template <typename ptrtype>
+    inline void ptr<ptrtype>::copy(const ptr& ptr) {
+
+        if (ptr.ptrcnt == nullptr) { ptrcnt = nullptr; return; }
+
+        ptrcnt = ptr.ptrcnt;
+        ptrcnt->refcount++;
+    }
+
+    template <typename ptrtype>
+    inline void ptr<ptrtype>::init(const ptrtype* ptr) {
+
+        if (ptr) ptrcnt = new ptrcontainer(ptr);
+        else ptrcnt = nullptr;
+
+    }
+
+    template <typename ptrtype>
+    inline void ptr<ptrtype>::cleanup() {
+
+        if (!ptrcnt) return;
+
+        if (ptrcnt->refcount == 0) { if (ptrcnt->p) delete (const ptrtype*)ptrcnt->p; delete ptrcnt; }
+        else ptrcnt->refcount--;
+
+    }
+
+}
+/*
 #include <cstring>
 #include "./internal/context.hpp"
 #include "./internal/jitboxinternal.hpp"
@@ -908,5 +1255,7 @@ inline void jitbox::internalinstruction::processinstruction(internalinstruction*
     processinstruction(in, nextidx, idx + 1, varargs...);
 
 }
+
+*/
 
 #endif

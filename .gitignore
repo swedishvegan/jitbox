@@ -10,5 +10,10 @@ compile_commands.json
 CTestTestfile.cmake
 _deps
 debug
+.vs
 .vscode
+*.vcxproj
+*.filters
+*.sln
+*.exe
 jitbox

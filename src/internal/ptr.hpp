@@ -2,7 +2,7 @@
 #define PTRHPP
 
 // simple smart pointer implementation I wrote a long time ago before I knew that
-// std smart pointers were a thing -- I still use it just out of nostalgia
+// std smart pointers were a thing; I still use it just out of nostalgia
 
 template <int _>
 struct ptrcontainerbase {

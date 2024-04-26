@@ -1,9 +1,811 @@
-
+#include <iostream>
 #include "./jitbox.hpp"
 #include "./Timer.hpp"
 
 using namespace jitbox;
-#include <iostream>
+namespace jbi = _jitbox; // short for 'jitbox internal'
+
+#define indentchar " "
+
+string printable::print(int alignment, bool addnewline) const { return indent(alignment) + this->tostring(alignment) + (addnewline ? "\n" : ""); }
+
+printable::~printable() { }
+
+string printable::indent(int nind) {
+
+    if (nind == 0) return " ";
+
+    string ind;
+    for (int i = 0; i < nind - 1; i++) ind += indentchar "  ";
+    return " " + ind + indentchar " ";
+
+}
+
+string printable::pad(string str, int padnum) {
+
+    int reqspace = padnum - (int)str.size();
+    if (reqspace < 0) return str.substr(0, padnum - 3) + "...";
+
+    for (int i = 0; i < reqspace; i++) str += " ";
+    return str;
+
+}
+
+#ifdef JITBOX_DEBUG
+
+error::error(errorcode code) : code(code) { }
+
+#endif
+
+inline bool signature::operator < (const signature& rh) const {
+     
+    if (identifier < rh.identifier) return true;
+    if (identifier > rh.identifier) return false;
+    if (returntype < rh.returntype) return true;
+    if (returntype > rh.returntype) return false;
+
+    return types < rh.types;
+
+}
+
+string signature::tostring(int alignment) const {
+
+    string s = "identifier:\n" + indent(alignment + 1) + std::to_string(identifier) + "\n";
+    s += indent(alignment) + "argument types:\n";
+
+    int numargs = types.size();
+    for (int i = 0; i < numargs; i++) s += type(types[i]).print(alignment + 1, i != numargs - 1);
+
+    s += indent(alignment) + "return type\n";
+    s += type(returntype).print(alignment + 1, false);
+
+    return s;
+
+}
+
+const id incrementid = 4;
+
+template <typename keytype>
+inline id getvaluefromkey(map<keytype, id>& kvmap, map<id, keytype>& vkmap, id& nextfreeid, const keytype& key) {
+
+    auto findmatch = kvmap.find(key);
+
+    if (findmatch == kvmap.end()) {
+
+        kvmap[key] = nextfreeid;
+        vkmap[nextfreeid] = key;
+
+        nextfreeid += incrementid;
+        return nextfreeid - incrementid;
+
+    }
+
+    return findmatch->second;
+
+}
+
+template <typename keytype>
+inline const keytype* getkeyfromvalue(map<id, keytype>& vkmap, id id) {
+
+    auto findmatch = vkmap.find(id);
+
+    if (findmatch == vkmap.end()) return nullptr;
+    return &findmatch->second;
+
+}
+
+#define implementmaps(thetype, K, V) \
+\
+map<K, V> thetype##kvmap; \
+map<V, K> thetype##vkmap; \
+id thetype##nextfreeid = type::thetype + incrementid
+
+implementmaps(pointer, id, id);
+implementmaps(array, id, id);
+implementmaps(structure, signature, id);
+implementmaps(function, signature, id);
+
+type::type() { }
+
+#define validatetypeid(thetype, keytype) \
+\
+case type::thetype: \
+    \
+    if (!getkeyfromvalue<keytype>(thetype##vkmap, mid)) throw error(error::invalidtypeid); \
+    break;
+
+type::type(id mid) : mid(mid) { 
+    
+    determineclass();
+
+#ifdef JITBOX_DEBUG
+    
+    switch (mclass) {
+
+        validatetypeid(pointer, id);
+        validatetypeid(array, id);
+        validatetypeid(structure, signature);
+        validatetypeid(function, signature);
+
+    }
+
+#endif
+
+}
+
+bool jitbox::operator == (const type& lh, id rh) { return lh.getid() == rh; }
+
+bool jitbox::operator == (const type& lh, const type& rh) { return lh.getid() == rh.getid(); }
+
+bool jitbox::operator == (id lh, const type& rh) { return lh == rh.getid(); }
+
+bool jitbox::operator != (const type& lh, id rh) { return lh.getid() != rh; }
+
+bool jitbox::operator != (const type& lh, const type& rh) { return lh.getid() != rh.getid(); }
+
+bool jitbox::operator != (id lh, const type& rh) { return lh != rh.getid(); }
+
+#define maketype(thetype, argtype, fullargtype) \
+type type::make##thetype(fullargtype arg) { return type(getvaluefromkey<argtype>(thetype##kvmap, thetype##vkmap, thetype##nextfreeid, arg)); }
+
+maketype(pointer, id, id);
+maketype(array, id, id);
+maketype(structure, signature, const signature&);
+maketype(function, signature, const signature&);
+
+#define gettype(thetype, keytype, rettype) \
+\
+rettype type::get##thetype##type() const { return *getkeyfromvalue<keytype>(thetype##vkmap, mid); }
+
+gettype(pointer, id, id);
+gettype(array, id, id);
+gettype(structure, signature, const signature&);
+gettype(function, signature, const signature&);
+
+bool type::is(type t) const {
+
+    if (t.mid == anything) return true;
+    if (mid == t.mid) return true;
+    if (mclass != t.mclass) return false;
+
+    if (mclass == primitive && t.mid == primitive) return true;
+
+    if (mclass == pointer) {
+
+        if (t.mid == pointer) return true;
+        return type(getpointertype()).is(t.getpointertype());
+
+    }
+
+    if (mclass == array) {
+
+        if (t.mid == array) return true;
+        return type(getarraytype()).is(t.getarraytype());
+
+    }
+
+    if (mclass == structure || mclass == function) {
+
+        if (t.mid == structure || t.mid == function) return true;
+
+        const signature* lh, * rh;
+
+        if (mclass == structure) { lh = &getstructuretype(); rh = &t.getstructuretype(); }
+        else { lh = &getfunctiontype(); rh = &t.getfunctiontype(); }
+
+        if (lh->identifier != rh->identifier) return false;
+
+        for (int k = 0; k < lh->types.size(); k++)
+            if (!type(lh->types[k]).is(rh->types[k])) return false;
+
+        return true;
+
+    }
+
+    return false;
+
+}
+
+bool type::is(id i) const { return is(type(i)); }
+
+id type::getid() const { return mid; }
+
+id type::getclass() const { return mclass; }
+
+bool type::isconcrete() const {
+
+    if (mid == nothing) return true;
+    if (mid == anything) return false;
+    if (mclass == primitive) return mid != primitive;
+
+    if (mclass == pointer) {
+
+        if (mid == pointer) return false;
+        return type(getpointertype()).isconcrete();
+
+    }
+
+    if (mclass == array) {
+
+        if (mid == array) return false;
+        return type(getarraytype()).isconcrete();
+
+    }
+
+    if (mclass == structure || mclass == function) {
+
+        if (mid == mclass) return false;
+
+        auto& sig = (mclass == structure) ? getstructuretype() : getfunctiontype();
+
+        for (int k = 0; k < sig.types.size(); k++)
+            if (!type(sig.types[k]).isconcrete()) return false;
+
+        return true;
+
+    }
+
+    return false;
+
+}
+
+bool type::isabstract() const { return !isconcrete(); }
+
+bool type::isinteger() const { return mid >= i8 && mid <= u64; }
+
+bool type::isunsigned() const { return mid >= u8 && mid <= u64; }
+
+bool type::isfp() const { return mid == f32 || mid == f64; }
+
+int type::numbytes() const {
+
+    if (mclass == primitive) {
+
+        if (mid == i8 || mid == u8) return 1;
+        if (mid == i16 || mid == u16) return 2;
+        if (mid == i32 || mid == u32 || mid == f32) return 4;
+        return 8;
+
+    }
+
+    if (mclass == array) return -1;
+
+    if (mclass == structure || mclass == function) {
+
+        auto& sig = (mclass == structure) ? getstructuretype() : getfunctiontype();
+        int b = 0;
+
+        for (int k = 0; k < sig.types.size(); k++) b += type(sig.types[k]).numbytes();
+
+        return b;
+
+    }
+
+    if (mclass == nothing) return 0;
+
+    return 8;
+
+}
+
+void type::determineclass() {
+
+    if (mid == nothing) mclass = nothing;
+    else if (mid == anything) mclass = anything;
+    else if (mid >= primitive && mid < pointer) mclass = primitive;
+    else if ((mid - pointer) % 4 == 0) mclass = pointer;
+    else if ((mid - array) % 4 == 0) mclass = array;
+    else if ((mid - structure) % 4 == 0) mclass = structure;
+    else if ((mid - function) % 4 == 0) mclass = function;
+
+}
+
+string type::tostring(int alignment) const {
+
+    if (mid == nothing) return "nothing";
+
+    if (mid == anything) return "anything";
+
+    if (mclass == primitive) {
+
+        static const char* primitives[] = { "primitive", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64" };
+        return primitives[mid - primitive];
+
+    }
+
+    if (mclass == array) return "array of:\n" + type(getarraytype()).print(alignment + 1, false);
+
+    if (mclass == pointer) return "pointer to:\n" + type(getpointertype()).print(alignment + 1, false);
+
+    if (mclass == function) return "function:\n" + getfunctiontype().print(alignment + 1, false);
+
+    if (mclass == structure) return "structure:\n" + getstructuretype().print(alignment + 1, false);
+
+    return "unknown type";
+
+}
+
+bool constant::operator == (const constant& ctc) {
+
+    if (dtype != ctc.dtype) return false;
+
+    auto bw = type(dtype).numbytes();
+
+    if (bw == 1) return vu8 == ctc.vu8;
+    if (bw == 2) return vu16 == ctc.vu16;
+    if (bw == 4) return vu32 == ctc.vu32;
+    return vu64 == ctc.vu64;
+
+}
+
+bool constant::operator != (const constant& ctc) { return !(*this == ctc); }
+
+#define ctctostringcase(thetype) else if (dtype == type::thetype) s = std::to_string(v##thetype)
+
+string constant::tostring(int) const {
+
+    string s = "unknown";
+
+    if (type(dtype).isinteger()) {
+
+        if (false);
+        ctctostringcase(u8);
+        ctctostringcase(i8);
+        ctctostringcase(u16);
+        ctctostringcase(i16);
+        ctctostringcase(u32);
+        ctctostringcase(i32);
+        ctctostringcase(u64);
+        ctctostringcase(i64);
+
+    }
+    else {
+
+        if (dtype == type::f32) s = std::to_string(vf32);
+        else if (dtype == type::f64) s = std::to_string(vf64);
+
+    }
+
+    return s;
+
+}
+
+const u8 _jitbox::instructionlengths[] = {
+
+    0, // begfnc
+    0, // endfnc
+    2, // alias
+    1, // farg
+    1, // regarg
+    2, // rhint
+    1, // hot
+    0, // beglp
+    0, // endlp
+    1, // rfree
+    1, // exit
+    1, // j
+    2, // jz
+    2, // jnz
+    3, // je
+    3, // jne
+    3, // jg
+    3, // jge
+    1, // callv
+    2, // call
+    0, // retv
+    1, // ret
+    2, // halloc
+    2, // hinit
+    3, // copy
+    2, // mov
+    4, // movz
+    4, // movnz
+    5, // move
+    5, // movne
+    5, // movg
+    5, // movge
+    2, // ref
+    2, // deref
+    2, // objlen
+    2, // cast
+    3, // add
+    3, // sub
+    3, // mul
+    3, // div
+    3, // mod
+    3, // band
+    3, // bor
+    3, // bxor
+    2, // bnot
+    2, // zero
+    2, // nzero
+    3, // eq
+    3, // neq
+    3, // gt
+    3, // gte
+    3, // shl
+    3, // shr
+    3, // rotl
+    3, // rotr
+
+};
+
+const char* _jitbox::instructionnames[] = {
+
+    "begfnc",
+    "endfnc",
+    "alias",
+    "farg",
+    "regarg",
+    "rhint",
+    "hot",
+    "beglp",
+    "endlp",
+    "rfree",
+    "exit",
+    "j",
+    "jz",
+    "jnz",
+    "je",
+    "jne",
+    "jg",
+    "jge",
+    "callv",
+    "call",
+    "retv",
+    "ret",
+    "halloc",
+    "hinit",
+    "copy",
+    "mov",
+    "movz",
+    "movnz",
+    "move",
+    "movne",
+    "movg",
+    "movge",
+    "ref",
+    "deref",
+    "objlen",
+    "cast",
+    "add",
+    "sub",
+    "mul",
+    "div",
+    "mod",
+    "band",
+    "bor",
+    "bxor",
+    "bnot",
+    "zero",
+    "nzero",
+    "eq",
+    "neq",
+    "gt",
+    "gte",
+    "shl",
+    "shr",
+    "rotl",
+    "rotr"
+
+};
+
+jbi::compilerobject::compilerobject(jbi::compilerobject::cotype type) : type(type) { }
+
+jbi::instruction::instruction(opcode op, ssaid* srcargs) : compilerobject(compilerobject::cotype::instruction), op(op) { std::memcpy(args, srcargs, sizeof(ssaid) * instructionlengths[op]); }
+
+jbi::variable::variable() : compilerobject(compilerobject::cotype::variable) { }
+
+jbi::variable::variable(codeblock* owner, jitbox::type dtype) : compilerobject(compilerobject::cotype::variable), owner(owner) {
+    
+    id = owner->variables->size();
+    lrbeg = owner->code.size() + owner->begidx;
+    lrend = id;
+    val.dtype = dtype;
+
+}
+
+jbi::variable::variable(codeblock* owner, jitbox::constant c) : compilerobject(compilerobject::cotype::variable), owner(owner), val(c) {
+
+    id = owner->variables->size();
+    lrbeg = owner->code.size() + owner->begidx;
+    lrend = id;
+
+}
+
+jbi::instruction* jbi::codeblock::addinstruction(opcode op, ssaid* args) {
+
+    auto inst = new instruction(op, args);
+    code.push_back(inst);
+
+    return inst;
+
+}
+
+jbi::variable* jbi::codeblock::addvariable(jitbox::type vtype) {
+
+    auto var = new variable(this, vtype);
+    variables->push_back(var);
+
+    return var;
+
+}
+
+jbi::variable* jbi::codeblock::addconstant(jitbox::constant c) {
+
+    auto var = new variable(this, c);
+    variables->push_back(var);
+
+    return var;
+
+}
+
+jbi::codeblock::codeblock(cbtype blocktype) : compilerobject(compilerobject::cotype::codeblock), blocktype(blocktype) { if (blocktype == cbtype::function) variables = new vec<pvariable>(); }
+
+jbi::codeblock::~codeblock() { if (blocktype == cbtype::function) delete variables; }
+
+jbi::context* jbi::context::curcontext() { return jitbox::context::curcontext; }
+
+#define defconst(ctype) \
+constant jitbox::const##ctype(ctype val) { constant c; c.v##ctype = val; c.dtype = type::ctype; c.isconst = true; return c; }
+
+defconst(u8);
+defconst(i8);
+defconst(u16);
+defconst(i16);
+defconst(u32);
+defconst(i32);
+defconst(u64);
+defconst(i64);
+defconst(f32);
+defconst(f64);
+
+jbi::context* context::curcontext = nullptr;
+
+context::context(bool active) { curcontext = new jbi::context(); if (active) use(); }
+
+void context::use() const { curcontext = ctx(); }
+
+context::~context() { curcontext = nullptr; }
+
+var::var(const var& v) { assign(v); }
+var::var(const constant& c) { assign(c); }
+var::var(instruction in) { assign(in); }
+
+void var::operator = (const var& v) { assign(v); }
+void var::operator = (const constant& c) { assign(c); }
+void var::operator = (instruction in) { assign(in); }
+
+type var::getdtype() const { return v->val.dtype; }
+
+ssaid var::getssaid() const { return v->id; }
+
+string var::tostring(int alignment) const {
+
+        
+
+}
+
+void var::assign(const var&) {
+
+
+}
+
+void var::assign(const constant&) {
+
+
+}
+
+void var::assign(instruction) {
+
+
+}
+
+void function::use() { }
+
+type function::getdtype() const { return definition->dtype; }
+
+function& function::argtypes(const typelist& types) {
+
+
+
+}
+
+function& function::rettype(type rtype) {
+
+
+
+}
+
+string function::tostring(int alignment) const {
+    
+
+
+}
+
+function::function(_jitbox::codeblock* definition, bool active) : definition(definition) { }
+
+void jitbox::terminate(var exitcode) {
+
+    auto ctx = jbi::context::curcontext();
+
+#ifdef JITBOX_DEBUG
+
+    if (ctx) throw error(error::noactivecontext);
+
+#endif
+
+    auto scope = ctx->curscope;
+
+#ifdef JITBOX_DEBUG
+
+    if (!scope) throw error(error::noactivescope);
+
+#endif
+
+    static ssaid argsbuf[1];
+    argsbuf[0] = exitcode.getssaid();
+
+    scope->addinstruction(
+        jbi::opcode::exit, argsbuf
+    );
+
+}
+
+void jitbox::ret() {
+
+    auto ctx = jbi::context::curcontext();
+
+#ifdef JITBOX_DEBUG
+
+    if (ctx) throw error(error::noactivecontext);
+
+#endif
+
+    auto scope = ctx->curscope;
+
+#ifdef JITBOX_DEBUG
+
+    if (!scope) throw error(error::noactivescope);
+
+#endif
+
+    scope->addinstruction(
+        jbi::opcode::retv, nullptr
+    );
+
+}
+
+void jitbox::ret(var v) {
+
+    auto ctx = jbi::context::curcontext();
+
+#ifdef JITBOX_DEBUG
+
+    if (ctx) throw error(error::noactivecontext);
+
+#endif
+
+    auto scope = ctx->curscope;
+
+#ifdef JITBOX_DEBUG
+
+    if (!scope) throw error(error::noactivescope);
+
+#endif
+
+    static ssaid argsbuf[1];
+    argsbuf[0] = v.getssaid();
+
+    scope->addinstruction(
+        jbi::opcode::ret, argsbuf
+    );
+
+}
+
+instruction jitbox::call(function func) {
+
+    auto ctx = jbi::context::curcontext();
+
+#ifdef JITBOX_DEBUG
+
+    if (ctx) throw error(error::noactivecontext);
+
+#endif
+
+    auto scope = ctx->curscope;
+
+#ifdef JITBOX_DEBUG
+
+    if (!scope) throw error(error::noactivescope);
+
+#endif
+
+    static ssaid argsbuf[2];
+
+    auto v = scope->addconstant(consti32(func.getid()));
+    argsbuf[0] = v->id;
+    argsbuf[1] = 0;
+
+    return scope->addinstruction(
+        jbi::opcode::call, argsbuf
+    );
+
+}
+
+instruction jitbox::call(function func, const varlist& args) {
+
+    auto ctx = jbi::context::curcontext();
+
+#ifdef JITBOX_DEBUG
+
+    if (ctx) throw error(error::noactivecontext);
+
+#endif
+
+    auto scope = ctx->curscope;
+
+#ifdef JITBOX_DEBUG
+
+    if (!scope) throw error(error::noactivescope);
+
+#endif
+
+    static ssaid argsbuf[2];
+
+    for (const auto& arg : args) {
+
+        argsbuf[0] = arg.getssaid();
+        scope->addinstruction(
+            jbi::opcode::farg, argsbuf
+        );
+
+    }
+
+    auto v = scope->addconstant(consti32(func.getid()));
+    argsbuf[0] = v->id;
+    argsbuf[1] = 0;
+
+    return scope->addinstruction(
+        jbi::opcode::call, argsbuf
+    );
+
+}
+
+instruction jitbox::cast(var src, type to) {
+
+    throw error(error::ok);
+
+}
+
+instruction jitbox::add(var lh, var rh) {
+
+    auto ctx = jbi::context::curcontext();
+
+#ifdef JITBOX_DEBUG
+
+    if (ctx) throw error(error::noactivecontext);
+
+#endif
+
+    auto scope = ctx->curscope;
+
+#ifdef JITBOX_DEBUG
+
+    if (!scope) throw error(error::noactivescope);
+
+#endif
+
+    static ssaid argsbuf[3];
+    argsbuf[0] = lh.getssaid();
+    argsbuf[1] = rh.getssaid();
+    argsbuf[2] = 0;
+
+    scope->addinstruction(
+        jbi::opcode::add, argsbuf
+    );
+
+}
+
 int main() {
 
     context ctxt;
@@ -44,11 +846,11 @@ int main() {
             var holyshit = bitwiseand(xyz, constu32(911));
             xyz = add(xyz, xyz);
 
-            call(f, {&xyz});
+            call(f, {xyz});
 
-            var zz = call(f, {&xyz});
+            var zz = call(f, {xyz});
 
-            call(g, {&zz, &zz});
+            call(g, {zz, zz});
 
             var rr = bitwisenot(zz);
 
@@ -129,127 +931,12 @@ int main() {
         compile();
         std::cout << "Took: " << timer.time() << "\n";
 
-    } catch (exception e) { std::cout << e.message << "\n"; return 1; }
+    } catch (error e) { std::cout << e.code << "\n"; return 1; }
 
     return 0;
 
 }
-
 /*
-
-TODO:
-
-    Second pass:
-
-        - Flatten nested code
-        - Fold constants
-
-            - Check if a constant is foldable --- if it's a loop variable then it's not
-            - 
-
-        - Insert rhint and free instructions
-        - Insert jumps, both conditional and unconditional
-        - Convert addresses to typed addresses & calculate whether each address is temp or saved
-        - Fix instruction formats
-
-*/
-
-
-    /*
-
-    T0 = arg(0)
-    
-    IF:
-
-        CONDITION:
-
-            je T0, imm(2)
-
-        BODY:
-
-            ret imm(1)
-
-    IF:
-
-        CONDITION:
-
-            T1 = mod T0, 2
-            jz T1
-
-        BODY:
-
-            ret imm(0)
-
-    T2 = imm(2)
-
-    WHILE:
-
-        CONDITION:
-
-            jge T2, T0
-
-        BODY:
-
-            IF:
-
-                T3 = mod T0, T2
-                jz T3
-
-            BODY:
-
-                ret imm(0)
-
-            T4 = add T2, imm(2) // T4 is flagged as a dependency variable
-
-    ret imm(1)
-
-    - Each variable's live range is calculated
-    - Once it reaches the end of its live range, if it has a curfew, write it back into its home
-
-    SECOND PASS:
-
-    - saved values = need to be preserved across function calls
-    - temp values = no curfew 
-
-    - Scan N instructions ahead
-    - For each assignment:
-
-        - If it's a mov assignment, simply set address(dstidx) = address(srcidx)
-        - Otherwise, depending on use:
-            - alloctemp(idx)
-            - allocsaved(idx)
-
-    - Once live range comes to an end:
-
-        - restore if variable has curfew
-        - depending on use:
-            - freetemp(idx)
-            - freesaved(idx)
-
-        - Calculate the importance of each one, and do the following in order of importance:
-
-            - If it's used as a function call argument, put it in the corresponding slot
-            - Otherwise, if it's a saved value, assign it the next available saved slot
-            - Otherwise, assign it the next available temp slot
-            
-    At runtime, temp(i) and saved(i) are resolved by the JIT.
-
-        - SLJIT is told the maximum number of saved registers ever used at beginning of function
-        - Each time a temp value is created, num_avail_saved is decremented if applicable
-        - Each time a saved value is created, num_avail_temp is decremented if applicable
-
-    TODO:
-
-        - Compile-time constant evaluation
-        - Context system
-        - codeblock system
-        - jitbox.hpp implementations
-        - tostring implementations
-        - disable copy constructors where applicable
-        - Make sure macros don't fuck up intellisense
-    
-    */
-
 string address::tostring(int alignment) const {
 
     if (addr == 0) return "null";
@@ -302,434 +989,6 @@ string bytecode::tostring(int alignment) const {
     }
 
     return s;
-
-}
-
-#define _ctctostringcase(thetype) else if (dtype == type::thetype) s = ( printdtype ? #thetype ":" : "") + std::to_string(v##thetype)
-
-string compiletimeconstant::tostringsimple(bool printdtype) const {
-
-    string s = "unknown";
-
-    if (type(dtype).isinteger()) {
-        
-        if (false);
-        _ctctostringcase(u8);
-        _ctctostringcase(i8);
-        _ctctostringcase(u16);
-        _ctctostringcase(i16);
-        _ctctostringcase(u32);
-        _ctctostringcase(i32);
-        _ctctostringcase(u64);
-        _ctctostringcase(i64);
-
-    }
-    else { 
-        
-        if (dtype == type::f32) s = (printdtype ? "f32:" : "") + std::to_string(vf32); 
-        else if (dtype == type::f64) s = (printdtype ? "f64:" : "") + std::to_string(vf64); 
-    
-    }
-
-    return s;
-
-}
-
-string compiletimeconstant::tostring(int alignment) const { return tostringsimple(true); }
-
-context* context::curcontext = nullptr;
-
-const uint32_t jitbox::instlengths[] = {
-
-    0, // begfnc
-    0, // endfnc
-    2, // alias
-    1, // farg
-    1, // regarg
-    2, // rhint
-    1, // hot
-    0, // beglp
-    0, // endlp
-    1, // rfree
-    0, // exit
-    1, // j
-    2, // jz
-    2, // jnz
-    3, // je
-    3, // jne
-    3, // jg
-    3, // jge
-    1, // callv
-    2, // call
-    0, // retv
-    1, // ret
-    2, // halloc
-    2, // hinit
-    3, // copy
-    2, // mov
-    4, // movz
-    4, // movnz
-    5, // move
-    5, // movne
-    5, // movg
-    5, // movge
-    2, // ref
-    2, // deref
-    2, // objlen
-    2, // cast
-    3, // add
-    3, // sub
-    3, // mul
-    3, // div
-    3, // mod
-    3, // band
-    3, // bor
-    3, // bxor
-    2, // bnot
-    2, // zero
-    2, // nzero
-    3, // eq
-    3, // neq
-    3, // gt
-    3, // gte
-    3, // shl
-    3, // shr
-    3, // rotl
-    3, // rotr
-
-};
-
-const char* jitbox::instnames[] = {
-
-    "begfnc",
-    "endfnc",
-    "alias",
-    "farg",
-    "regarg",
-    "rhint",
-    "hot",
-    "beglp",
-    "endlp",
-    "rfree",
-    "exit",
-    "j",
-    "jz",
-    "jnz",
-    "je",
-    "jne",
-    "jg",
-    "jge",
-    "callv",
-    "call",
-    "retv",
-    "ret",
-    "halloc",
-    "hinit",
-    "copy",
-    "mov",
-    "movz",
-    "movnz",
-    "move",
-    "movne",
-    "movg",
-    "movge",
-    "ref",
-    "deref",
-    "objlen",
-    "cast",
-    "add",
-    "sub",
-    "mul",
-    "div",
-    "mod",
-    "band",
-    "bor",
-    "bxor",
-    "bnot",
-    "zero",
-    "nzero",
-    "eq",
-    "neq",
-    "gt",
-    "gte",
-    "shl",
-    "shr",
-    "rotl",
-    "rotr"
-
-};
-
-string printable::print(int alignment, bool addnewline) const { return indent(alignment) + this->tostring(alignment) + (addnewline ? "\n" : ""); }
-
-printable::~printable() { }
-
-string printable::indent(int nind) {
-
-	if (nind == 0) return " ";
-
-	string ind;
-	for (int i = 0; i < nind - 1; i++) ind += INDENT_CHAR "  ";
-	return " " + ind + INDENT_CHAR " ";
-
-}
-
-string printable::pad(string str, int padnum) {
-
-	int reqspace = padnum - (int)str.size();
-	if (reqspace < 0) return str.substr(0, padnum - 3) + "...";
-
-	for (int i = 0; i < reqspace; i++) str += " ";
-	return str;
-
-}
-
-printablestring::printablestring(string str) : str(str) { }
-printablestring::printablestring(const char* str) : str(str) { }
-
-string printablestring::tostring(int) const { return str; }
-
-string signature::tostring(int alignment) const {
-
-    string s = "identifier:\n" + indent(alignment + 1) + std::to_string(identifier) + "\n";
-    s += indent(alignment) + "argument types:\n";
-
-    int numargs = types.size();
-    for (int i = 0; i < numargs; i++) s += type(types[i]).print(alignment + 1, i != numargs - 1);
-
-    s += indent(alignment) + "return type\n";
-    s += type(returntype).print(alignment + 1, false);
-
-    return s;
-
-}  
-
-const id incrementid = 4;
-
-inline bool signature::operator<(const signature& rh) const {
-
-	if (identifier < rh.identifier) return true;
-	if (identifier > rh.identifier) return false;
-	if (returntype < rh.returntype) return true;
-	if (returntype > rh.returntype) return false;
-
-	return types < rh.types;
-
-}
-
-template <typename keytype>
-inline id getvaluefromkey(map<keytype, id>& kvmap, map<id, keytype>& vkmap, id& nextfreeid, const keytype& key) {
-
-	auto findmatch = kvmap.find(key);
-
-	if (findmatch == kvmap.end()) {
-
-		kvmap[key] = nextfreeid;
-		vkmap[nextfreeid] = key;
-
-		nextfreeid += incrementid;
-		return nextfreeid - incrementid;
-
-	}
-
-	return findmatch->second;
-
-}
-
-template <typename keytype>
-inline const keytype& getkeyfromvalue(map<id, keytype>& vkmap, id id, bool& error) {
-
-	static keytype dummy{ };
-
-	auto findmatch = vkmap.find(id);
-
-	if (findmatch == vkmap.end()) { error = true; return dummy; }
-	return findmatch->second;
-
-}
-
-#define implementmaps(thetype, K, V) \
-\
-map<K, V> thetype##kvmap; \
-map<V, K> thetype##vkmap; \
-id thetype##nextfreeid = type::thetype + incrementid
-
-implementmaps(pointer, id, id);
-implementmaps(array, id, id);
-implementmaps(structure, signature, id);
-implementmaps(function, signature, id);
-
-type::type(id mid) : mid(mid) { determineclass(); }
-
-#define maketype(thetype, argtype, fullargtype) \
-type type::make##thetype(fullargtype arg) { return type(getvaluefromkey<argtype>(thetype##kvmap, thetype##vkmap, thetype##nextfreeid, arg)); }
-
-maketype(pointer, id, id);
-maketype(array, id, id);
-maketype(structure, signature, const signature&);
-maketype(function, signature, const signature&);
-
-#define gettype(thetype, keytype, rettype) \
-\
-rettype type::get##thetype##type() const { \
-	\
-	bool error = false; \
-	const auto& ret = getkeyfromvalue<keytype>(thetype##vkmap, mid, error); \
-	\
-	if (error) throw exception{ "get" #thetype "type() called on id " + std::to_string(mid) + ", which is not a " #thetype " type" }; \
-	return ret; \
-	\
-}
-
-gettype(pointer, id, id);
-gettype(array, id, id);
-gettype(structure, signature, const signature&);
-gettype(function, signature, const signature&);
-
-bool type::is(type t) const { 
-
-	if (t.mid == anything) return true;
-	if (mid == t.mid) return true;
-	if (mclass != t.mclass) return false;
-
-    if (mclass == primitive & t.mid == primitive) return true;
-
-	if (mclass == pointer) {
-
-		if (t.mid == pointer) return true;
-		return type(getpointertype()).is(t.getpointertype());
-
-	}
-
-	if (mclass == array) {
-
-		if (t.mid == array) return true;
-		return type(getarraytype()).is(t.getarraytype());
-
-	}
-
-	if (mclass == structure || mclass == function) {
-
-        if (t.mid == structure || t.mid == function) return true;
-
-		const signature *lh, *rh;
-
-		if (mclass == structure) { lh = &getstructuretype(); rh = &t.getstructuretype(); }
-		else { lh = &getfunctiontype(); rh = &t.getfunctiontype(); }
-
-		if (lh->identifier != rh->identifier) return false;
-
-		for (int k = 0; k < lh->types.size(); k++)
-			if (!type(lh->types[k]).is(rh->types[k])) return false;
-
-		return true;
-
-	}
-
-	return false;
-
-}
-
-bool type::isconcrete() const {
-
-	if (mid == nothing) return true;
-	if (mid == anything) return false;
-	if (mclass == primitive) return mid != primitive;
-
-	if (mclass == pointer) {
-
-		if (mid == pointer) return false;
-		return type(getpointertype()).isconcrete();
-
-	}
-
-	if (mclass == array) {
-
-		if (mid == array) return false;
-		return type(getarraytype()).isconcrete();
-
-	}
-
-	if (mclass == structure || mclass == function) {
-
-        if (mid == mclass) return false;
-
-		auto& sig = (mclass == structure) ? getstructuretype() : getfunctiontype();
-
-		for (int k = 0; k < sig.types.size(); k++)
-			if (!type(sig.types[k]).isconcrete()) return false;
-
-		return true;
-
-	}
-
-	return false;
-
-}
-
-int type::bytes() const { 
-
-	if (mclass == primitive) {
-
-		if (mid == i8 || mid == u8) return 1;
-		if (mid == i16 || mid == u16) return 2;
-		if (mid == i32 || mid == u32 || mid == f32) return 4;
-		return 8;
-
-	}
-
-	if (mclass == array) return -1;
-
-	if (mclass == structure || mclass == function) {
-
-		auto& sig = (mclass == structure) ? getstructuretype() : getfunctiontype();
-		int b = 0;
-
-		for (int k = 0; k < sig.types.size(); k++) b += type(sig.types[k]).bytes();
-
-		return b;
-
-	}
-
-	if (mclass == nothing) return 0;
-
-	return 8;
-
-}
-
-void type::determineclass() {
-
-	if (mid == nothing) mclass = nothing;
-	else if (mid == anything) mclass = anything;
-	else if (mid >= primitive && mid < pointer) mclass = primitive;
-	else if ((mid - pointer) % 4 == 0) mclass = pointer;
-	else if ((mid - array) % 4 == 0) mclass = array;
-	else if ((mid - structure) % 4 == 0) mclass = structure;
-	else if ((mid - function) % 4 == 0) mclass = function;
-	
-}
-
-string type::tostring(int alignment) const {
-
-    if (mid == nothing) return "nothing";
-
-    if (mid == anything) return "anything";
-
-    if (mclass == primitive) {
-
-        static const char* primitives[] = { "primitive", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64" };
-        return primitives[mid - primitive];
-
-    }
-
-    if (mclass == array) return "array of:\n" + type(getarraytype()).print(alignment + 1, false);
-
-    if (mclass == pointer) return "pointer to:\n" + type(getpointertype()).print(alignment + 1, false);
-
-    if (mclass == function) return "function:\n" + getfunctiontype().print(alignment + 1, false);
-
-    if (mclass == structure) return "structure:\n" + getstructuretype().print(alignment + 1, false);
-
-    return "unknown type";
 
 }
 
@@ -823,3 +1082,4 @@ context::~context() {
     curcontext = nullptr;
 
 }
+*/

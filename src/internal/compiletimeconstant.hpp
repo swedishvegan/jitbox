@@ -37,8 +37,6 @@ namespace jitbox {
 
     };
 
-    inline compiletimeconstant fold(compiletimeconstant, compiletimeconstant, inst);
-
 #define _defctc(thetype, ctype) \
 inline compiletimeconstant const##thetype(ctype val) { compiletimeconstant c; c.v##thetype = val; c.dtype = type::thetype; return c; }
 

@@ -3,129 +3,135 @@
 #include "./Timer.hpp"
 
 using namespace jitbox;
-namespace jbi = _jitbox; // short for 'jitbox internal'
+namespace jbi = jitbox::_internal; // short for 'jitbox internal'
 
-#define indentchar " "
+#define indentChar " "
 
-string printable::print(int alignment, bool addnewline) const { return indent(alignment) + this->tostring(alignment) + (addnewline ? "\n" : ""); }
+String Printable::print(U8 alignment, Bool addnewline) const { return indent(alignment) + this->toString(alignment) + (addnewline ? "\n" : ""); }
 
-printable::~printable() { }
+Printable::~Printable() { }
 
-string printable::indent(int nind) {
+String Printable::indent(U8 nind) {
 
     if (nind == 0) return " ";
 
-    string ind;
-    for (int i = 0; i < nind - 1; i++) ind += indentchar "  ";
-    return " " + ind + indentchar " ";
+    String ind;
+    for (I32 i = 0; i < nind - 1; i++) ind += indentChar "  ";
+    return " " + ind + indentChar " ";
 
 }
 
-string printable::pad(string str, int padnum) {
+String Printable::pad(String str, U16 padnum) {
 
-    int reqspace = padnum - (int)str.size();
+    I32 reqspace = padnum - (int)str.size();
     if (reqspace < 0) return str.substr(0, padnum - 3) + "...";
 
-    for (int i = 0; i < reqspace; i++) str += " ";
+    for (I32 i = 0; i < reqspace; i++) str += " ";
     return str;
 
 }
 
 #ifdef JITBOX_DEBUG
 
-error::error(errorcode code) : code(code) { }
+Error::Error(ErrorCode code) : code(code) { }
 
 #endif
 
-inline bool signature::operator < (const signature& rh) const {
+inline Bool Signature::operator < (const Signature& rh) const {
      
     if (identifier < rh.identifier) return true;
     if (identifier > rh.identifier) return false;
-    if (returntype < rh.returntype) return true;
-    if (returntype > rh.returntype) return false;
+    if (returnType.getID() < rh.returnType.getID()) return true;
+    if (returnType.getID() > rh.returnType.getID()) return false;
 
-    return types < rh.types;
+    return argTypes < rh.argTypes;
 
 }
 
-string signature::tostring(int alignment) const {
+String Signature::toString(U8 alignment) const {
 
-    string s = "identifier:\n" + indent(alignment + 1) + std::to_string(identifier) + "\n";
+    String s = "identifier:\n" + indent(alignment + 1) + std::to_string(identifier) + "\n";
     s += indent(alignment) + "argument types:\n";
 
-    int numargs = types.size();
-    for (int i = 0; i < numargs; i++) s += type(types[i]).print(alignment + 1, i != numargs - 1);
+    I32 numargs = argTypes.size();
+    for (I32 i = 0; i < numargs; i++) s += argTypes[i].print(alignment + 1, i != numargs - 1);
 
     s += indent(alignment) + "return type\n";
-    s += type(returntype).print(alignment + 1, false);
+    s += Type(returnType).print(alignment + 1, false);
 
     return s;
 
 }
 
-const id incrementid = 4;
+const ID incrementID = 7;
 
-template <typename keytype>
-inline id getvaluefromkey(map<keytype, id>& kvmap, map<id, keytype>& vkmap, id& nextfreeid, const keytype& key) {
+template <typename KeyType>
+inline ID getValueFromKey(Map<KeyType, ID>& kvMap, Map<ID, KeyType>& vkMap, ID& nextFreeID, const KeyType& key) {
 
-    auto findmatch = kvmap.find(key);
+    auto findMatch = kvMap.find(key);
 
-    if (findmatch == kvmap.end()) {
+    if (findMatch == kvMap.end()) {
 
-        kvmap[key] = nextfreeid;
-        vkmap[nextfreeid] = key;
+        kvMap[key] = nextFreeID;
+        vkMap[nextFreeID] = key;
 
-        nextfreeid += incrementid;
-        return nextfreeid - incrementid;
+        nextFreeID += incrementID;
+        return nextFreeID - incrementID;
 
     }
 
-    return findmatch->second;
+    return findMatch->second;
 
 }
 
-template <typename keytype>
-inline const keytype* getkeyfromvalue(map<id, keytype>& vkmap, id id) {
+template <typename KeyType>
+inline const KeyType* getKeyFromValue(Map<ID, KeyType>& vkMap, ID ID) {
 
-    auto findmatch = vkmap.find(id);
+    auto findMatch = vkMap.find(ID);
 
-    if (findmatch == vkmap.end()) return nullptr;
-    return &findmatch->second;
+    if (findMatch == vkMap.end()) return nullptr;
+    return &findMatch->second;
 
 }
 
-#define implementmaps(thetype, K, V) \
+#define implementMaps(TheType, K, V) \
 \
-map<K, V> thetype##kvmap; \
-map<V, K> thetype##vkmap; \
-id thetype##nextfreeid = type::thetype + incrementid
+Map<K, V> kvMap_##TheType; \
+Map<V, K> vkMap_##TheType; \
+ID nextFreeID_##TheType = Type::TheType + incrementID
 
-implementmaps(pointer, id, id);
-implementmaps(array, id, id);
-implementmaps(structure, signature, id);
-implementmaps(function, signature, id);
+implementMaps(POINTER, ID, ID);
+implementMaps(ARRAY, ID, ID);
+implementMaps(STRUCTURE, Signature, ID);
+implementMaps(FUNCTION, Signature, ID);
+implementMaps(ANY, Type::List, ID);
+implementMaps(ALL, Type::List, ID);
+implementMaps(NOT, ID, ID);
 
-type::type() { }
+Type::Type() { }
 
-#define validatetypeid(thetype, keytype) \
+#define validateTypeID(TheType, KeyType) \
 \
-case type::thetype: \
+case Type::TheType: \
     \
-    if (!getkeyfromvalue<keytype>(thetype##vkmap, mid)) throw error(error::invalidtypeid); \
+    if (!getKeyFromValue<KeyType>(vkMap_##TheType, identifier)) throw Error(Error::INVALID_TYPE_ID); \
     break;
 
-type::type(id mid) : mid(mid) { 
+Type::Type(ID identifier) : identifier(identifier) {
     
-    determineclass();
+    determineClass();
 
 #ifdef JITBOX_DEBUG
     
-    switch (mclass) {
+    switch (typeClass) {
 
-        validatetypeid(pointer, id);
-        validatetypeid(array, id);
-        validatetypeid(structure, signature);
-        validatetypeid(function, signature);
+        validateTypeID(POINTER, ID);
+        validateTypeID(ARRAY, ID);
+        validateTypeID(STRUCTURE, Signature);
+        validateTypeID(FUNCTION, Signature);
+        validateTypeID(ANY, Type::List);
+        validateTypeID(ALL, Type::List);
+        validateTypeID(NOT, ID);
 
     }
 
@@ -133,70 +139,223 @@ type::type(id mid) : mid(mid) {
 
 }
 
-bool jitbox::operator == (const type& lh, id rh) { return lh.getid() == rh; }
+Bool jitbox::operator == (const Type& lh, ID rh) { return lh.getID() == rh; }
 
-bool jitbox::operator == (const type& lh, const type& rh) { return lh.getid() == rh.getid(); }
+Bool jitbox::operator == (const Type& lh, const Type& rh) { return lh.getID() == rh.getID(); }
 
-bool jitbox::operator == (id lh, const type& rh) { return lh == rh.getid(); }
+Bool jitbox::operator == (ID lh, const Type& rh) { return lh == rh.getID(); }
 
-bool jitbox::operator != (const type& lh, id rh) { return lh.getid() != rh; }
+Bool jitbox::operator != (const Type& lh, ID rh) { return lh.getID() != rh; }
 
-bool jitbox::operator != (const type& lh, const type& rh) { return lh.getid() != rh.getid(); }
+Bool jitbox::operator != (const Type& lh, const Type& rh) { return lh.getID() != rh.getID(); }
 
-bool jitbox::operator != (id lh, const type& rh) { return lh != rh.getid(); }
+Bool jitbox::operator != (ID lh, const Type& rh) { return lh != rh.getID(); }
 
-#define maketype(thetype, argtype, fullargtype) \
-type type::make##thetype(fullargtype arg) { return type(getvaluefromkey<argtype>(thetype##kvmap, thetype##vkmap, thetype##nextfreeid, arg)); }
+Bool jitbox::operator < (const Type& lh, const Type& rh) { return lh.getID() < rh.getID(); }
 
-maketype(pointer, id, id);
-maketype(array, id, id);
-maketype(structure, signature, const signature&);
-maketype(function, signature, const signature&);
+#define makeType(TheType, TheType2, ArgType, FullArgType) \
+Type Type::TheType2(FullArgType arg) { return Type(getValueFromKey<ArgType>(kvMap_##TheType, vkMap_##TheType, nextFreeID_##TheType, arg)); }
 
-#define gettype(thetype, keytype, rettype) \
+Type Type::Pointer(Type t) { return Type(getValueFromKey<ID>(kvMap_POINTER, vkMap_POINTER, nextFreeID_POINTER, t.getID())); }
+
+Type Type::Array(Type t) { return Type(getValueFromKey<ID>(kvMap_ARRAY, vkMap_ARRAY, nextFreeID_ARRAY, t.getID())); }
+
+Type Type::Structure(const Signature& s) { return Type(getValueFromKey<Signature>(kvMap_STRUCTURE, vkMap_STRUCTURE, nextFreeID_STRUCTURE, s)); }
+
+Type Type::Function(const Signature& s) { return Type(getValueFromKey<Signature>(kvMap_FUNCTION, vkMap_FUNCTION, nextFreeID_FUNCTION, s)); }
+
+Type Type::Any(const Type::List& tl) { return Type(getValueFromKey<Type::List>(kvMap_ANY, vkMap_ANY, nextFreeID_ANY, tl)); }
+
+Type Type::All(const Type::List& tl) { return Type(getValueFromKey<Type::List>(kvMap_ALL, vkMap_ALL, nextFreeID_ALL, tl)); }
+
+Type Type::Not(Type t) {
+
+    if (t.typeClass == NOT) return Type(*getKeyFromValue<ID>(vkMap_NOT, t.getID()));
+    else return Type(getValueFromKey<ID>(kvMap_NOT, vkMap_NOT, nextFreeID_NOT, t.getID()));
+
+}
+
+#define makeTypeGetter(TheType, getter, KeyType, rettype) \
 \
-rettype type::get##thetype##type() const { return *getkeyfromvalue<keytype>(thetype##vkmap, mid); }
+rettype Type::getter() const { return *getKeyFromValue<KeyType>(vkMap_##TheType, identifier); }
 
-gettype(pointer, id, id);
-gettype(array, id, id);
-gettype(structure, signature, const signature&);
-gettype(function, signature, const signature&);
+Type Type::pointsTo() const {
 
-bool type::is(type t) const {
+#ifdef JITBOX_DEBUG
+    if (typeClass != POINTER) throw Error(Error::TYPE_GETTER_MISMATCH);
+#endif
 
-    if (t.mid == anything) return true;
-    if (mid == t.mid) return true;
-    if (mclass != t.mclass) return false;
+    return *getKeyFromValue<ID>(vkMap_POINTER, identifier);
 
-    if (mclass == primitive && t.mid == primitive) return true;
+}
 
-    if (mclass == pointer) {
+Type Type::contains() const {
 
-        if (t.mid == pointer) return true;
-        return type(getpointertype()).is(t.getpointertype());
+#ifdef JITBOX_DEBUG
+    if (typeClass != ARRAY) throw Error(Error::TYPE_GETTER_MISMATCH);
+#endif
+
+    return *getKeyFromValue<ID>(vkMap_ARRAY, identifier);
+
+}
+
+const Signature& Type::getSignature() const {
+
+#ifdef JITBOX_DEBUG
+    if (typeClass != FUNCTION && typeClass != STRUCTURE) throw Error(Error::TYPE_GETTER_MISMATCH);
+#endif
+
+    return *getKeyFromValue<Signature>((typeClass == FUNCTION) ? vkMap_FUNCTION : vkMap_STRUCTURE, identifier);
+
+}
+
+const Type::List& Type::getList() const {
+
+#ifdef JITBOX_DEBUG
+    if (typeClass != ANY && typeClass != ALL) throw Error(Error::TYPE_GETTER_MISMATCH);
+#endif
+
+    return *getKeyFromValue<Type::List>((typeClass == ANY) ? vkMap_ANY : vkMap_ALL, identifier);
+
+}
+
+Bool Type::is(Type t) const {
+    std::cout << "Checking whether\n" << print(1) << "is" << t.print(1) << "\n";
+    if (t.identifier == ANYTHING) return true;
+    if (t.identifier == NOTHING) return false;
+    if (identifier == t.identifier) return true;
+
+    if (t.typeClass == NOT) {
+
+        if (t.identifier == NOT) return typeClass == NOT;
+
+        return !(this->is(Not(t)));
 
     }
 
-    if (mclass == array) {
+    if (typeClass == NOT) {
 
-        if (t.mid == array) return true;
-        return type(getarraytype()).is(t.getarraytype());
+        if (identifier == NOT) return false;
+
+        return !(Not(*this).is(t));
+        // Not(PRIMITIVE).is(ARRAY) = ! (PRIMITIVE.is(ARRAY)) = ! false = true
+        
+    }
+
+    if (t.typeClass == ANY) {
+
+        if (t.identifier == ANY) return typeClass == ANY;
+
+        const auto& tl = t.getList();
+
+        for (auto ty : tl) if (this->is(ty)) return true;
+        return false;
 
     }
 
-    if (mclass == structure || mclass == function) {
+    if (typeClass == ANY) {
 
-        if (t.mid == structure || t.mid == function) return true;
+        if (identifier == ANY) return false;
 
-        const signature* lh, * rh;
+        const auto& tl = getList();
 
-        if (mclass == structure) { lh = &getstructuretype(); rh = &t.getstructuretype(); }
-        else { lh = &getfunctiontype(); rh = &t.getfunctiontype(); }
+        for (auto ty : tl) if (ty.is(t)) return true;
+        return false;
 
-        if (lh->identifier != rh->identifier) return false;
+    }
 
-        for (int k = 0; k < lh->types.size(); k++)
-            if (!type(lh->types[k]).is(rh->types[k])) return false;
+    if (t.typeClass == ALL) {
+
+        if (t.identifier == ALL) return typeClass == ALL;
+
+        const auto& tl = t.getList();
+
+        for (auto ty : tl) if (!this->is(ty)) return false;
+        return true;
+
+    }
+
+    if (typeClass == ALL) {
+
+        if (identifier == ALL) return false;
+
+        const auto& tl = getList();
+
+        for (auto ty : tl) if (!ty.is(t)) return false;
+        return true;
+
+    }
+
+    if (typeClass != t.typeClass) return false;
+
+    if (typeClass == PRIMITIVE && t.identifier == PRIMITIVE) return true;
+
+    if (typeClass == POINTER) {
+
+        if (t.identifier == POINTER) return true;
+        return Type(pointsTo()).is(t.pointsTo());
+
+    }
+
+    if (typeClass == ARRAY) {
+
+        if (t.identifier == ARRAY) return true;
+        return Type(contains()).is(t.contains());
+
+    }
+
+    if (typeClass == STRUCTURE || typeClass == FUNCTION) {
+
+        if (t.identifier == STRUCTURE || t.identifier == FUNCTION) return true;
+
+        const Signature *lh, *rh;
+
+        if (typeClass == STRUCTURE) { lh = &getSignature(); rh = &t.getSignature(); }
+        else { lh = &getSignature(); rh = &t.getSignature(); }
+
+        return lh->identifier == rh->identifier;
+
+    }
+
+    return false;
+
+}
+
+Bool Type::is(ID i) const { return is(Type(i)); }
+
+ID Type::getID() const { return identifier; }
+
+ID Type::getClass() const { return typeClass; }
+
+Bool Type::isConcrete() const {
+
+    if (identifier == NOTHING) return true;
+    if (identifier == ANYTHING) return false;
+    if (typeClass == PRIMITIVE) return identifier != PRIMITIVE;
+    if (typeClass == ANY) return false;
+
+    if (typeClass == POINTER) {
+
+        if (identifier == POINTER) return false;
+        return Type(pointsTo()).isConcrete();
+
+    }
+
+    if (typeClass == ARRAY) {
+
+        if (identifier == ARRAY) return false;
+        return Type(contains()).isConcrete();
+
+    }
+
+    if (typeClass == STRUCTURE || typeClass == FUNCTION) {
+
+        if (identifier == typeClass) return false;
+
+        auto& sig = (typeClass == STRUCTURE) ? getSignature() : getSignature();
+
+        for (jitbox::I32 k = 0; k < sig.argTypes.size(); k++)
+            if (!sig.argTypes[k].isConcrete()) return false;
 
         return true;
 
@@ -206,162 +365,132 @@ bool type::is(type t) const {
 
 }
 
-bool type::is(id i) const { return is(type(i)); }
+Bool Type::isAbstract() const { return !isConcrete(); }
 
-id type::getid() const { return mid; }
+Bool Type::isInteger() const { return identifier >= Type::I8 && identifier <= Type::U64; }
 
-id type::getclass() const { return mclass; }
+Bool Type::isUnsigned() const { return identifier >= Type::U8 && identifier <= Type::U64; }
 
-bool type::isconcrete() const {
+Bool Type::isFP() const { return identifier == Type::F32 || identifier == Type::F64; }
 
-    if (mid == nothing) return true;
-    if (mid == anything) return false;
-    if (mclass == primitive) return mid != primitive;
+I32 Type::numBytes() const {
 
-    if (mclass == pointer) {
+    if (isAbstract()) return -1;
 
-        if (mid == pointer) return false;
-        return type(getpointertype()).isconcrete();
+    if (typeClass == PRIMITIVE) {
 
-    }
-
-    if (mclass == array) {
-
-        if (mid == array) return false;
-        return type(getarraytype()).isconcrete();
-
-    }
-
-    if (mclass == structure || mclass == function) {
-
-        if (mid == mclass) return false;
-
-        auto& sig = (mclass == structure) ? getstructuretype() : getfunctiontype();
-
-        for (int k = 0; k < sig.types.size(); k++)
-            if (!type(sig.types[k]).isconcrete()) return false;
-
-        return true;
-
-    }
-
-    return false;
-
-}
-
-bool type::isabstract() const { return !isconcrete(); }
-
-bool type::isinteger() const { return mid >= i8 && mid <= u64; }
-
-bool type::isunsigned() const { return mid >= u8 && mid <= u64; }
-
-bool type::isfp() const { return mid == f32 || mid == f64; }
-
-int type::numbytes() const {
-
-    if (mclass == primitive) {
-
-        if (mid == i8 || mid == u8) return 1;
-        if (mid == i16 || mid == u16) return 2;
-        if (mid == i32 || mid == u32 || mid == f32) return 4;
+        if (identifier == Type::I8 || identifier == Type::U8) return 1;
+        if (identifier == Type::I16 || identifier == Type::U16) return 2;
+        if (identifier == Type::I32 || identifier == Type::U32 || identifier == Type::F32) return 4;
         return 8;
 
     }
 
-    if (mclass == array) return -1;
+    if (typeClass == ARRAY) return -1;
 
-    if (mclass == structure || mclass == function) {
+    if (typeClass == STRUCTURE || typeClass == FUNCTION) {
 
-        auto& sig = (mclass == structure) ? getstructuretype() : getfunctiontype();
-        int b = 0;
+        auto& sig = (typeClass == STRUCTURE) ? getSignature() : getSignature();
+        jitbox::I32 b = 0;
 
-        for (int k = 0; k < sig.types.size(); k++) b += type(sig.types[k]).numbytes();
+        for (jitbox::I32 k = 0; k < sig.argTypes.size(); k++) b += sig.argTypes[k].numBytes();
 
         return b;
 
     }
 
-    if (mclass == nothing) return 0;
+    if (typeClass == NOTHING) return 0;
 
     return 8;
 
 }
 
-void type::determineclass() {
+void Type::determineClass() {
 
-    if (mid == nothing) mclass = nothing;
-    else if (mid == anything) mclass = anything;
-    else if (mid >= primitive && mid < pointer) mclass = primitive;
-    else if ((mid - pointer) % 4 == 0) mclass = pointer;
-    else if ((mid - array) % 4 == 0) mclass = array;
-    else if ((mid - structure) % 4 == 0) mclass = structure;
-    else if ((mid - function) % 4 == 0) mclass = function;
+    if (identifier == NOTHING) typeClass = NOTHING;
+    else if (identifier == ANYTHING) typeClass = ANYTHING;
+    else if (identifier >= PRIMITIVE && identifier < POINTER) typeClass = PRIMITIVE;
+    else if ((identifier - POINTER) % incrementID == 0) typeClass = POINTER;
+    else if ((identifier - ARRAY) % incrementID == 0) typeClass = ARRAY;
+    else if ((identifier - STRUCTURE) % incrementID == 0) typeClass = STRUCTURE;
+    else if ((identifier - FUNCTION) % incrementID == 0) typeClass = FUNCTION;
+    else if ((identifier - ANY) % incrementID == 0) typeClass = ANY;
 
 }
 
-string type::tostring(int alignment) const {
+String Type::toString(jitbox::U8 alignment) const {
 
-    if (mid == nothing) return "nothing";
+    if (identifier == NOTHING) return "nothing";
 
-    if (mid == anything) return "anything";
+    if (identifier == ANYTHING) return "anything";
 
-    if (mclass == primitive) {
+    if (typeClass == PRIMITIVE) {
 
-        static const char* primitives[] = { "primitive", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64" };
-        return primitives[mid - primitive];
+        static const char* PRIMITIVEs[] = { "primitive", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64" };
+        return PRIMITIVEs[identifier - PRIMITIVE];
 
     }
 
-    if (mclass == array) return "array of:\n" + type(getarraytype()).print(alignment + 1, false);
+    if (typeClass == ARRAY) return "array of:\n" + Type(contains()).print(alignment + 1, false);
 
-    if (mclass == pointer) return "pointer to:\n" + type(getpointertype()).print(alignment + 1, false);
+    if (typeClass == POINTER) return "pointer to:\n" + Type(pointsTo()).print(alignment + 1, false);
 
-    if (mclass == function) return "function:\n" + getfunctiontype().print(alignment + 1, false);
+    if (typeClass == FUNCTION) return "function:\n" + getSignature().print(alignment + 1, false);
 
-    if (mclass == structure) return "structure:\n" + getstructuretype().print(alignment + 1, false);
+    if (typeClass == STRUCTURE) return "structure:\n" + getSignature().print(alignment + 1, false);
+
+    if (typeClass == ANY) {
+
+        String s = "any:\n";
+        const auto& tl = getList();
+
+        for (jitbox::I32 i = 0; i < tl.size(); i++) s += tl[i].print(alignment + 1, i == tl.size() - 1);
+        return s;
+
+    }
 
     return "unknown type";
+    
+}
+
+Bool Constant::operator == (const Constant& ctc) {
+
+    if (type != ctc.type) return false;
+
+    auto bw = Type(type).numBytes();
+
+    if (bw == 1) return vU8 == ctc.vU8;
+    if (bw == 2) return vU16 == ctc.vU16;
+    if (bw == 4) return vU32 == ctc.vU32;
+    return vU64 == ctc.vU64;
 
 }
 
-bool constant::operator == (const constant& ctc) {
+Bool Constant::operator != (const Constant& ctc) { return !(*this == ctc); }
 
-    if (dtype != ctc.dtype) return false;
+#define CTCToStringCase(TheType) else if (type == Type::TheType) s = std::to_string(v##TheType) + #TheType
 
-    auto bw = type(dtype).numbytes();
+String Constant::toString(U8) const {
 
-    if (bw == 1) return vu8 == ctc.vu8;
-    if (bw == 2) return vu16 == ctc.vu16;
-    if (bw == 4) return vu32 == ctc.vu32;
-    return vu64 == ctc.vu64;
+    String s = "unknown";
 
-}
-
-bool constant::operator != (const constant& ctc) { return !(*this == ctc); }
-
-#define ctctostringcase(thetype) else if (dtype == type::thetype) s = std::to_string(v##thetype)
-
-string constant::tostring(int) const {
-
-    string s = "unknown";
-
-    if (type(dtype).isinteger()) {
+    if (type.isInteger()) {
 
         if (false);
-        ctctostringcase(u8);
-        ctctostringcase(i8);
-        ctctostringcase(u16);
-        ctctostringcase(i16);
-        ctctostringcase(u32);
-        ctctostringcase(i32);
-        ctctostringcase(u64);
-        ctctostringcase(i64);
+        CTCToStringCase(U8);
+        CTCToStringCase(I8);
+        CTCToStringCase(U16);
+        CTCToStringCase(I16);
+        CTCToStringCase(U32);
+        CTCToStringCase(I32);
+        CTCToStringCase(U64);
+        CTCToStringCase(I64);
 
     }
     else {
 
-        if (dtype == type::f32) s = std::to_string(vf32);
-        else if (dtype == type::f64) s = std::to_string(vf64);
+        if (type == Type::F32) s = std::to_string(vF32);
+        else if (type == Type::F64) s = std::to_string(vF64);
 
     }
 
@@ -369,7 +498,7 @@ string constant::tostring(int) const {
 
 }
 
-const u8 _jitbox::instructionlengths[] = {
+const U8 jbi::instructionLengths[] = {
 
     0, // begfnc
     0, // endfnc
@@ -429,7 +558,7 @@ const u8 _jitbox::instructionlengths[] = {
 
 };
 
-const char* _jitbox::instructionnames[] = {
+const char* jbi::instructionNames[] = {
 
     "begfnc",
     "endfnc",
@@ -489,332 +618,742 @@ const char* _jitbox::instructionnames[] = {
 
 };
 
-jbi::compilerobject::compilerobject(jbi::compilerobject::cotype type) : type(type) { }
+jbi::CompilerObject::CompilerObject(U8 objectType) : objectType(objectType) { }
 
-jbi::instruction::instruction(opcode op, ssaid* srcargs) : compilerobject(compilerobject::cotype::instruction), op(op) { std::memcpy(args, srcargs, sizeof(ssaid) * instructionlengths[op]); }
+jbi::Instruction::Instruction(Opcode op, Type type, Variable** srcArgs, I8 nargs) : CompilerObject(CompilerObject::INSTRUCTION), op(op), type(type) { 
 
-jbi::variable::variable() : compilerobject(compilerobject::cotype::variable) { }
+    memset(args, 0, MAX_NUM_ARGS * sizeof(SSAID));
+    for (I32 i = 0; i < nargs; i++) args[i] = srcArgs[i]->identifier;
 
-jbi::variable::variable(codeblock* owner, jitbox::type dtype) : compilerobject(compilerobject::cotype::variable), owner(owner) {
+}
+
+jbi::Variable::Variable() : CompilerObject(CompilerObject::VARIABLE) { }
+
+Bool jbi::Variable::isLocal() const { return identifier > 0; }
+
+jbi::Local* jbi::Variable::toLocal() { return (Local*)this; }
+
+jbi::Global* jbi::Variable::toGlobal() { return (Global*)this; }
+
+String jbi::Variable::toString(U8 alignment) const {
+
+    String s = (identifier > 0) ? "local" : ((identifier < 0) ? "global" : "null");
+    auto sID = (identifier > 0) ? identifier : -identifier;
+
+    s += std::to_string(sID);
     
-    id = owner->variables->size();
-    lrbeg = owner->code.size() + owner->begidx;
-    lrend = id;
-    val.dtype = dtype;
+    return s;
 
 }
 
-jbi::variable::variable(codeblock* owner, jitbox::constant c) : compilerobject(compilerobject::cotype::variable), owner(owner), val(c) {
+jbi::Local::Local(CodeBlock* owner, Type type) : owner(owner) {
 
-    id = owner->variables->size();
-    lrbeg = owner->code.size() + owner->begidx;
-    lrend = id;
+    identifier = owner->variables->size() + 1;
+    lrBeg = owner->code.size() + owner->begIdx;
+    lrEnd = lrBeg;
+    val.type = type;
 
 }
 
-jbi::instruction* jbi::codeblock::addinstruction(opcode op, ssaid* args) {
+jbi::Local::Local(CodeBlock* owner, Constant c) : owner(owner) {
 
-    auto inst = new instruction(op, args);
+    identifier = owner->variables->size() + 1;
+    val = c;
+    lrBeg = owner->code.size() + owner->begIdx;
+    lrEnd = identifier;
+
+}
+
+jbi::Global::Global(Context* owner, Constant c) : owner(owner) {
+
+    identifier = -1 - owner->variables.size();
+    val = c;
+
+}
+
+jbi::Global::Global(Context* owner, Global* g) : owner(owner) {
+
+    identifier = -1 - owner->variables.size();
+    val = g->val;
+
+}
+
+jbi::Instruction* jbi::CodeBlock::addInstruction(Opcode op, Variable** args, U8 nargs) {
+
+    auto resulttype = inferType(op, args, nargs);
+    auto inst = new Instruction(op, resulttype, args, nargs);
     code.push_back(inst);
 
     return inst;
 
 }
 
-jbi::variable* jbi::codeblock::addvariable(jitbox::type vtype) {
+jbi::Variable* jbi::CodeBlock::addVariable(Type type) {
 
-    auto var = new variable(this, vtype);
+    auto var = new Local(this, type);
     variables->push_back(var);
 
     return var;
 
 }
 
-jbi::variable* jbi::codeblock::addconstant(jitbox::constant c) {
+jbi::Variable* jbi::CodeBlock::addConstant(jitbox::Constant c) {
 
-    auto var = new variable(this, c);
+    auto var = new Local(this, c);
     variables->push_back(var);
 
     return var;
 
 }
 
-jbi::codeblock::codeblock(cbtype blocktype) : compilerobject(compilerobject::cotype::codeblock), blocktype(blocktype) { if (blocktype == cbtype::function) variables = new vec<pvariable>(); }
+void jbi::CodeBlock::addAssignment(jbi::Variable* lh, jitbox::Instruction in) {
 
-jbi::codeblock::~codeblock() { if (blocktype == cbtype::function) delete variables; }
+    //infertype(in->op, &lh, -1);
+    in->args[instructionLengths[in->op] - 1] = lh->identifier;
 
-jbi::context* jbi::context::curcontext() { return jitbox::context::curcontext; }
+}
 
-#define defconst(ctype) \
-constant jitbox::const##ctype(ctype val) { constant c; c.v##ctype = val; c.dtype = type::ctype; c.isconst = true; return c; }
+I32 fArgIndex;
+jbi::CodeBlock* nextFunc;
 
-defconst(u8);
-defconst(i8);
-defconst(u16);
-defconst(i16);
-defconst(u32);
-defconst(i32);
-defconst(u64);
-defconst(i64);
-defconst(f32);
-defconst(f64);
+Type jbi::CodeBlock::inferType(Opcode op, Variable** args, U8 nargs) {
 
-jbi::context* context::curcontext = nullptr;
+    auto ctx = jbi::Context::curContext();
 
-context::context(bool active) { curcontext = new jbi::context(); if (active) use(); }
+#ifdef JITBOX_DEBUG
 
-void context::use() const { curcontext = ctx(); }
+    for (I32 i = 0; i < nargs; i++) {
 
-context::~context() { curcontext = nullptr; }
+        auto arg = args[i];
+        auto owner = arg->isLocal() ? arg->toLocal()->owner->owner : arg->toGlobal()->owner;
 
-var::var(const var& v) { assign(v); }
-var::var(const constant& c) { assign(c); }
-var::var(instruction in) { assign(in); }
+        if (owner != ctx) throw Error(Error::CONTEXT_MISMATCH);
 
-void var::operator = (const var& v) { assign(v); }
-void var::operator = (const constant& c) { assign(c); }
-void var::operator = (instruction in) { assign(in); }
+    }
 
-type var::getdtype() const { return v->val.dtype; }
+#endif
 
-ssaid var::getssaid() const { return v->id; }
+    Type restrictions = Type::ANYTHING;
+    Type rettype;
+    Bool enforceMatchingTypes = false;
 
-string var::tostring(int alignment) const {
+    switch (op) {
+    case Opcode::MOV:
 
+        rettype = args[0]->val.type;
+        break;
+
+    case Opcode::EXIT:
+
+        restrictions = Type::U8;
+        break;
+
+    case Opcode::RETV:
+
+        break;
+
+    case Opcode::RET:
+
+        restrictions = ctx->curFunction->type.getSignature().returnType;
+        break;
+
+    case Opcode::FARG:
+
+        restrictions = nextFunc->type.getSignature().argTypes[fArgIndex];
+        break;
+
+    case Opcode::CALL:
+
+#ifdef JITBOX_DEBUG
+        if (nextFunc->owner != ctx) throw Error(Error::CONTEXT_MISMATCH);
+#endif
+
+        rettype = nextFunc->type.getSignature().returnType;
+        break;
+
+    case Opcode::ADD:
         
+        restrictions = Type::PRIMITIVE;
+        rettype = args[0]->val.type;
+        enforceMatchingTypes = true;
+
+        break;
+
+    }
+
+#ifdef JITBOX_DEBUG
+
+    for (I32 i = 0; i < nargs; i++)
+        if (!args[i]->val.type.is(restrictions)) throw Error(Error::INVALID_ARGUMENT);
+
+    if (enforceMatchingTypes) for (I32 i = 0; i < nargs - 1; i++)
+        if (args[i]->val.type != args[i + 1]->val.type) throw Error(Error::TYPE_MISMATCH);
+
+#endif
+
+    return rettype;
 
 }
 
-void var::assign(const var&) {
-
-
-}
-
-void var::assign(const constant&) {
-
-
-}
-
-void var::assign(instruction) {
-
-
-}
-
-void function::use() { }
-
-type function::getdtype() const { return definition->dtype; }
-
-function& function::argtypes(const typelist& types) {
-
-
-
-}
-
-function& function::rettype(type rtype) {
-
-
-
-}
-
-string function::tostring(int alignment) const {
+jbi::CodeBlock::CodeBlock(Context* owner, U8 blockType, Type type, ID identifier) : CompilerObject(CompilerObject::CODEBLOCK), owner(owner), blockType(blockType), type(type), identifier(identifier) { 
     
-
-
-}
-
-function::function(_jitbox::codeblock* definition, bool active) : definition(definition) { }
-
-void jitbox::terminate(var exitcode) {
-
-    auto ctx = jbi::context::curcontext();
-
-#ifdef JITBOX_DEBUG
-
-    if (ctx) throw error(error::noactivecontext);
-
-#endif
-
-    auto scope = ctx->curscope;
-
-#ifdef JITBOX_DEBUG
-
-    if (!scope) throw error(error::noactivescope);
-
-#endif
-
-    static ssaid argsbuf[1];
-    argsbuf[0] = exitcode.getssaid();
-
-    scope->addinstruction(
-        jbi::opcode::exit, argsbuf
-    );
+    variables = new Vec<pVariable>();
+    curScope = this;
 
 }
 
-void jitbox::ret() {
+jbi::CodeBlock::~CodeBlock() { if (blockType == FUNCTION) delete variables; }
 
-    auto ctx = jbi::context::curcontext();
+String jbi::CodeBlock::toString(U8 alignment) const {
 
-#ifdef JITBOX_DEBUG
+    String s;
+    
+    if (blockType == FUNCTION) {
 
-    if (ctx) throw error(error::noactivecontext);
+        s = "FUNCTION:\n\n";
+        
+        for (auto c : code) {
 
-#endif
+            auto in = c.cast<jbi::Instruction>()();
 
-    auto scope = ctx->curscope;
+            s += indent(alignment + 1) + instructionNames[in->op] + ": ";
 
-#ifdef JITBOX_DEBUG
+            I32 nargs = instructionLengths[in->op];
 
-    if (!scope) throw error(error::noactivescope);
+            for (I32 i = 0; i < nargs; i++)
+                s += (
+                    in->args[i] > 0
+                        ? (*variables)[in->args[i] - 1]->toString(0)
+                        : owner->variables[-1 - in->args[i]]->toString(0)
+                ) + (i < nargs - 1 ? ", " : "");
 
-#endif
+            s += "\n";
 
-    scope->addinstruction(
-        jbi::opcode::retv, nullptr
-    );
+        }
 
-}
+        s += "\n";
 
-void jitbox::ret(var v) {
+    }
 
-    auto ctx = jbi::context::curcontext();
+    /*else if (CType == conditionalblock) {
 
-#ifdef JITBOX_DEBUG
+        I32 codelen = code->size();
+        for (I32 i = 0; i < codelen; i++) s += (*code)[i]->print(alignment, i != codelen - 1);
 
-    if (ctx) throw error(error::noactivecontext);
+    }
 
-#endif
+    else {
 
-    auto scope = ctx->curscope;
+        if (CType == whileblock) s += "while:\n\n";
+        else if (CType == ifblock) s += "if:\n\n";
+        else s += "else:\n\n";
 
-#ifdef JITBOX_DEBUG
+        for (auto c : *code) s += c->print(alignment + 1);
 
-    if (!scope) throw error(error::noactivescope);
+    }*/
 
-#endif
-
-    static ssaid argsbuf[1];
-    argsbuf[0] = v.getssaid();
-
-    scope->addinstruction(
-        jbi::opcode::ret, argsbuf
-    );
-
-}
-
-instruction jitbox::call(function func) {
-
-    auto ctx = jbi::context::curcontext();
-
-#ifdef JITBOX_DEBUG
-
-    if (ctx) throw error(error::noactivecontext);
-
-#endif
-
-    auto scope = ctx->curscope;
-
-#ifdef JITBOX_DEBUG
-
-    if (!scope) throw error(error::noactivescope);
-
-#endif
-
-    static ssaid argsbuf[2];
-
-    auto v = scope->addconstant(consti32(func.getid()));
-    argsbuf[0] = v->id;
-    argsbuf[1] = 0;
-
-    return scope->addinstruction(
-        jbi::opcode::call, argsbuf
-    );
+    return s;
 
 }
 
-instruction jitbox::call(function func, const varlist& args) {
+jbi::CodeBlock* jbi::Context::addFunction(const jitbox::Type::List& ArgTypes, Type returntype) {
 
-    auto ctx = jbi::context::curcontext();
+    Signature sig;
+
+    sig.identifier = functions.size() + 1;
+    sig.argTypes = ArgTypes;
+    sig.returnType = returntype;
+
+    auto f = new CodeBlock(this, CodeBlock::FUNCTION, Type::Function(sig), sig.identifier);
+    functions.push_back(f);
+
+    return f;
+
+}
+
+jbi::Variable* jbi::Context::addGlobalVariable(jbi::Variable* v) {
+
+    auto ctx = jbi::Context::curContext();
+    
+    auto newvar = new Global(ctx, v->toGlobal());
+    ctx->variables.push_back(newvar);
+
+    return newvar;
+
+}
+
+jbi::Variable* jbi::Context::addGlobalVariable(jitbox::Constant c) {
+
+    auto ctx = jbi::Context::curContext();
+
+    auto newvar = new Global(ctx, c);
+    ctx->variables.push_back(newvar);
+
+    return newvar;
+
+}
+
+jbi::Context* jbi::Context::curContext() { return jitbox::Context::curContext; }
+
+jbi::Variable* jbi::getInternalVar(VarRef v) { return v.v; }
+
+jbi::CodeBlock* jbi::getInternalCode(Function f) { return f.definition; }
+
+Constant jbi::fold(jbi::Instruction* in) {
+
+    return ConstU32(0);
+
+}
+
+#define defconst(CType) \
+Constant jitbox::Const##CType(CType val) { Constant c; c.v##CType = val; c.type = Type::CType; c.isConst = true; return c; }
+
+defconst(U8);
+defconst(I8);
+defconst(U16);
+defconst(I16);
+defconst(U32);
+defconst(I32);
+defconst(U64);
+defconst(I64);
+defconst(F32);
+defconst(F64);
+
+jbi::Context* Context::curContext = nullptr;
+
+Context::Context(Bool active) { ctx = new jbi::Context(); if (active) use(); }
+
+void Context::use() const { curContext = ctx(); }
+
+Context::~Context() { curContext = nullptr; }
+
+Var::Var(const Var& v) { assign(v); }
+Var::Var(const Constant& c) { assign(c); }
+Var::Var(Instruction in) { assign(in); }
+
+void Var::operator = (const Var& v) { assign(v); }
+void Var::operator = (const Constant& c) { assign(c); }
+void Var::operator = (Instruction in) { assign(in); }
+
+Type Var::getType() const { return v->val.type; }
+
+String Var::toString(U8 alignment) const { return v->toString(alignment); }
+
+void Var::assign(const Var& rh) {
+
+    auto ctx = jbi::Context::curContext();
 
 #ifdef JITBOX_DEBUG
-
-    if (ctx) throw error(error::noactivecontext);
-
+    if (!ctx) throw Error(Error::NO_ACTIVE_CONTEXT);
 #endif
 
-    auto scope = ctx->curscope;
+    auto f = ctx->curFunction;
 
-#ifdef JITBOX_DEBUG
+    if (f) {
 
-    if (!scope) throw error(error::noactivescope);
+        auto scope = f->curScope;
 
-#endif
+        if (!v || v->identifier > 0) v = scope->addVariable(rh.getType());
 
-    static ssaid argsbuf[2];
+        static jbi::Variable* argsbuf[2];
+        argsbuf[0] = rh.v;
+        argsbuf[1] = v;
 
-    for (const auto& arg : args) {
-
-        argsbuf[0] = arg.getssaid();
-        scope->addinstruction(
-            jbi::opcode::farg, argsbuf
+        scope->addInstruction(
+            jbi::Opcode::MOV,
+            argsbuf,
+            2
         );
 
     }
 
-    auto v = scope->addconstant(consti32(func.getid()));
-    argsbuf[0] = v->id;
+    else {
+
+#ifdef JITBOX_DEBUG
+        if (v) throw Error(Error::GLOBAL_REDECLARATION);
+#endif
+
+        v = ctx->addGlobalVariable(rh.v);
+
+    }
+
+}
+
+void Var::assign(const Constant& c) {
+
+    auto ctx = jbi::Context::curContext();
+
+#ifdef JITBOX_DEBUG
+    if (!ctx) throw Error(Error::NO_ACTIVE_CONTEXT);
+#endif
+
+    auto f = ctx->curFunction;
+
+    if (f) {
+
+        auto scope = f->curScope;
+
+#ifdef JITBOX_DEBUG
+        if (!scope) throw Error(Error::NO_ACTIVE_SCOPE);
+#endif
+
+        auto newconst = scope->addConstant(c);
+
+        if (v && v->identifier < 0) {
+
+            static jbi::Variable* argsbuf[2];
+            argsbuf[0] = newconst;
+            argsbuf[1] = v;
+
+            scope->addInstruction(
+                jbi::Opcode::MOV,
+                argsbuf,
+                2
+            );
+
+        }
+        else v = newconst;
+
+    }
+    else {
+
+#ifdef JITBOX_DEBUG
+        if (v) throw Error(Error::GLOBAL_REDECLARATION);
+#endif
+
+        v = ctx->addGlobalVariable(c);
+
+    }
+
+}
+
+void Var::assign(Instruction in) {
+
+    auto ctx = jbi::Context::curContext();
+
+#ifdef JITBOX_DEBUG
+    if (!ctx) throw Error(Error::NO_ACTIVE_CONTEXT);
+#endif
+
+    auto f = ctx->curFunction;
+
+#ifdef JITBOX_DEBUG
+
+    if (!f) for (I32 i = 0; i < jbi::instructionLengths[in->op]; i++)
+        if (in->args[i] > 0) throw Error(Error::NO_ACTIVE_FUNCTION);
+
+    if (in->args[jbi::instructionLengths[in->op] - 1] != 0) throw Error(Error::INVALID_ASSIGNMENT);
+
+#endif
+
+    auto scope = f->curScope;
+
+#ifdef JITBOX_DEBUG
+    if (!scope) throw Error(Error::NO_ACTIVE_SCOPE);
+#endif
+
+    if (!v || v->identifier > 0) v = scope->addVariable(in->type);
+    scope->addAssignment(v, in);
+
+}
+
+VarRef::VarRef(const Var& v) : v(v.v) { }
+
+VarRef::VarRef(const Constant& c) {
+
+    Var newVar(c);
+    v = newVar.v;
+
+}
+
+VarRef::VarRef(Instruction in) {
+
+    Var newVar(in);
+    v = newVar.v;
+
+}
+
+Function::Function(const Type::List& argTypes, Type returnType, Bool active) {
+
+    auto ctx = jbi::Context::curContext();
+
+#ifdef JITBOX_DEBUG
+    if (!ctx) throw Error(Error::NO_ACTIVE_CONTEXT);
+#endif
+
+    definition = ctx->addFunction(argTypes, returnType);
+
+    if (active) ctx->curFunction = definition;
+
+}
+
+void Function::use() { }
+
+Type Function::getType() const { return definition->type; }
+
+String Function::toString(U8 alignment) const { return definition->toString(alignment); }
+
+void jitbox::Terminate(VarRef exitcode) {
+
+    auto ctx = jbi::Context::curContext();
+
+#ifdef JITBOX_DEBUG
+    if (!ctx) throw Error(Error::NO_ACTIVE_CONTEXT);
+#endif
+
+    auto f = ctx->curFunction;
+
+#ifdef JITBOX_DEBUG
+    if (!f) throw Error(Error::NO_ACTIVE_FUNCTION);
+#endif
+
+    auto scope = f->curScope;
+
+#ifdef JITBOX_DEBUG
+    if (!scope) throw Error(Error::NO_ACTIVE_SCOPE);
+#endif
+
+    static jbi::Variable* argsbuf[1];
+    argsbuf[0] = jbi::getInternalVar(exitcode);
+
+    scope->addInstruction(
+        jbi::Opcode::EXIT,
+        argsbuf,
+        1
+    );
+
+}
+
+void jitbox::Return() {
+
+    auto ctx = jbi::Context::curContext();
+
+#ifdef JITBOX_DEBUG
+    if (!ctx) throw Error(Error::NO_ACTIVE_CONTEXT);
+#endif
+
+    auto f = ctx->curFunction;
+
+#ifdef JITBOX_DEBUG
+    if (!f) throw Error(Error::NO_ACTIVE_FUNCTION);
+#endif
+
+    auto scope = f->curScope;
+
+#ifdef JITBOX_DEBUG
+    if (!scope) throw Error(Error::NO_ACTIVE_SCOPE);
+#endif
+
+    scope->addInstruction(
+        jbi::Opcode::RETV,
+        nullptr,
+        0
+    );
+
+}
+
+void jitbox::Return(VarRef v) {
+    
+    auto ctx = jbi::Context::curContext();
+
+#ifdef JITBOX_DEBUG
+    if (!ctx) throw Error(Error::NO_ACTIVE_CONTEXT);
+#endif
+
+    auto f = ctx->curFunction;
+
+#ifdef JITBOX_DEBUG
+    if (!f) throw Error(Error::NO_ACTIVE_FUNCTION);
+#endif
+
+    auto scope = f->curScope;
+
+#ifdef JITBOX_DEBUG
+    if (!scope) throw Error(Error::NO_ACTIVE_SCOPE);
+#endif
+    
+    static jbi::Variable* argsbuf[1];
+    argsbuf[0] = jbi::getInternalVar(v);
+
+    scope->addInstruction(
+        jbi::Opcode::RET,
+        argsbuf,
+        1
+    );
+
+}
+
+Instruction jitbox::Call(Function func) {
+
+    auto ctx = jbi::Context::curContext();
+
+#ifdef JITBOX_DEBUG
+    if (!ctx) throw Error(Error::NO_ACTIVE_CONTEXT);
+#endif
+
+    auto f = ctx->curFunction;
+
+#ifdef JITBOX_DEBUG
+    if (!f) throw Error(Error::NO_ACTIVE_FUNCTION);
+#endif
+
+    auto scope = f->curScope;
+
+#ifdef JITBOX_DEBUG
+    if (!scope) throw Error(Error::NO_ACTIVE_SCOPE);
+#endif
+
+    static jbi::Variable* argsbuf[2];
+
+    nextFunc = jbi::getInternalCode(func);
+
+    auto v = scope->addConstant(ConstI32(jbi::getInternalCode(func)->identifier));
+    argsbuf[0] = v;
     argsbuf[1] = 0;
 
-    return scope->addinstruction(
-        jbi::opcode::call, argsbuf
+    return scope->addInstruction(
+        jbi::Opcode::CALL,
+        argsbuf,
+        1
     );
 
 }
 
-instruction jitbox::cast(var src, type to) {
+Instruction jitbox::Call(Function func, const VarList& args) {
 
-    throw error(error::ok);
+    auto ctx = jbi::Context::curContext();
+
+#ifdef JITBOX_DEBUG
+    if (!ctx) throw Error(Error::NO_ACTIVE_CONTEXT);
+#endif
+
+    auto f = ctx->curFunction;
+
+#ifdef JITBOX_DEBUG
+    if (!f) throw Error(Error::NO_ACTIVE_FUNCTION);
+#endif
+
+    auto scope = f->curScope;
+
+#ifdef JITBOX_DEBUG
+    if (!scope) throw Error(Error::NO_ACTIVE_SCOPE);
+#endif
+
+    static jbi::Variable* argsbuf[2];
+
+    fArgIndex = 0;
+    nextFunc = jbi::getInternalCode(func);
+
+    for (auto arg : args) {
+
+        argsbuf[0] = jbi::getInternalVar(arg);
+        scope->addInstruction(
+            jbi::Opcode::FARG,
+            argsbuf,
+            1
+        );
+
+        fArgIndex++;
+
+    }
+
+    auto v = scope->addConstant(ConstI32(nextFunc->identifier));
+    argsbuf[0] = v;
+    argsbuf[1] = 0;
+
+    return scope->addInstruction(
+        jbi::Opcode::CALL,
+        argsbuf,
+        1
+    );
 
 }
 
-instruction jitbox::add(var lh, var rh) {
+Instruction jitbox::Cast(VarRef src, Type to) {
 
-    auto ctx = jbi::context::curcontext();
+    throw Error(Error::OK);
 
-#ifdef JITBOX_DEBUG
+}
 
-    if (ctx) throw error(error::noactivecontext);
+Instruction jitbox::Add(VarRef lh, VarRef rh) {
 
-#endif
-
-    auto scope = ctx->curscope;
+    auto ctx = jbi::Context::curContext();
 
 #ifdef JITBOX_DEBUG
-
-    if (!scope) throw error(error::noactivescope);
-
+    if (!ctx) throw Error(Error::NO_ACTIVE_CONTEXT);
 #endif
 
-    static ssaid argsbuf[3];
-    argsbuf[0] = lh.getssaid();
-    argsbuf[1] = rh.getssaid();
+    auto f = ctx->curFunction;
+
+#ifdef JITBOX_DEBUG
+    if (!f) throw Error(Error::NO_ACTIVE_FUNCTION);
+#endif
+
+    auto scope = f->curScope;
+
+#ifdef JITBOX_DEBUG
+    if (!scope) throw Error(Error::NO_ACTIVE_SCOPE);
+#endif
+
+    static jbi::Variable* argsbuf[3];
+    argsbuf[0] = jbi::getInternalVar(lh);
+    argsbuf[1] = jbi::getInternalVar(rh);
     argsbuf[2] = 0;
 
-    scope->addinstruction(
-        jbi::opcode::add, argsbuf
+    return scope->addInstruction(
+        jbi::Opcode::ADD,
+        argsbuf,
+        2
     );
 
 }
 
-int main() {
+void jitbox::End() {
 
-    context ctxt;
+
+
+}
+
+const char* Errorcodes[] = {
+    "no Error",
+    "invalID type ID",
+    "no active context",
+    "no active FUNCTION",
+    "no active scope",
+    "Global redeclaration",
+    "invalID argument",
+    "type mismatch",
+    "invalID assignment",
+    "context mistmatch"
+};
+
+I32 main() {
+
+    Context ctxt;
 
     try {
 
         Timer timer;
+        
+        Var globalfuck = ConstU32(100);
+        Var globaldick = globalfuck;
 
-        auto f = makefunction().argtypes({type::u32}).rettype(type::u8);
+        Function f({ Type::U32 }, Type::U32);
+
+            Var x = ConstU32(420);
+            Var y = x;
+            Var z = Add(globaldick, y);
+            globalfuck = z;
+            globaldick = ConstU64(100);
+            z = Add(z, z);
+
+            Return(Add(z, globalfuck));
+
+        End();
+        
+        std::cout << f.print();
+
+        /*auto f = makeFUNCTION().ArgTypes({Type::u32}).rettype(Type::u8);
 
             makeif().condition(equal(getarg(0), constu32(2)));
                 ret(constu8(1));
@@ -840,7 +1379,7 @@ int main() {
             
         end();
 
-        auto g = makefunction();
+        auto g = makeFUNCTION();
 
             var xyz = constu32(97);
             var holyshit = bitwiseand(xyz, constu32(911));
@@ -872,8 +1411,8 @@ int main() {
 
             ret(count);
 
-            var aa = constu16(0); aa = div(aa, aa); // NOTE: reghint should not be generated if there is a function call inbetween the var's creation and the var's usage as an argument
-            var bb = aa;                            // NOTE: check to make sure that function arguments are able to be marked as persistent, also probably remove reghints for function arguments
+            var aa = constu16(0); aa = div(aa, aa); // NOTE: reghI32 should not be generated if there is a FUNCTION call inbetween the var's creation and the var's usage as an argument
+            var bb = aa;                            // NOTE: check to make sure that FUNCTION arguments are able to be marked as persistent, also probably remove reghints for FUNCTION arguments
             var cc = bb;
             var dd = cc;
             var ee = dd;// ee = constu16(420);
@@ -887,7 +1426,7 @@ int main() {
         //std::cout << f.print();
         //std::cout << g.print();
 
-        auto h = makefunction().argtypes({type::f32}).rettype(type::f32);
+        auto h = makeFUNCTION().ArgTypes({Type::f32}).rettype(Type::f32);
 
             var x = add(getarg(0), constf32(420.69));
 
@@ -905,9 +1444,9 @@ int main() {
 
         //std::cout << h.print();
 
-        var glob = makeglobalvar(constf32(69.0)); // ERROR: This constructor is called twice! Why???
+        var glob = makeGlobalVar(constf32(69.0)); // Error: This constructor is called twice! Why???
 
-        auto globtest = makefunction();
+        auto globtest = makeFUNCTION();
 
             var xq = glob;
             glob = xq;
@@ -930,56 +1469,58 @@ int main() {
         //std::cout << globtest.print();
         compile();
         std::cout << "Took: " << timer.time() << "\n";
+        */
 
-    } catch (error e) { std::cout << e.code << "\n"; return 1; }
+    }
+    catch (Error e) { std::cout << "you fucked up: " << Errorcodes[(int)e.code] << "\n"; return 1; }
 
     return 0;
 
 }
 /*
-string address::tostring(int alignment) const {
+String address::toString(I32 alignment) const {
 
     if (addr == 0) return "null";
 
-    uint32_t dtype = addr % 4;
+    uint32_t type = addr % 4;
     uint32_t mode = (addr >> 2) % 4;
-    uint32_t bytewidth = (addr >> 4) % 4;
-    uint32_t rhint = (addr >> 6) % 8;
-    uint32_t idx = addr >> 9;
+    uint32_t bytewIDth = (addr >> 4) % 4;
+    uint32_t rhI32 = (addr >> 6) % 8;
+    uint32_t IDx = addr >> 9;
 
-    string s;
+    String s;
 
-    static const char dtypes[] = { 'i', 'u', 'f' };
-    s += dtypes[dtype];
-    s += std::to_string(8 << bytewidth);
+    static const char types[] = { 'i', 'u', 'f' };
+    s += types[type];
+    s += std::to_String(8 << bytewIDth);
     s += ':';
 
     static const char* modes[] = { "tmp", "prs", "imm", "gbl" };
     s += modes[mode];
 
-    if (mode == addressmode::immediate) s += ":" + val.tostringsimple(false);
-    else s += ':' + std::to_string(idx);
+    if (mode == addressmode::immediate) s += ":" + val.toStringsimple(false);
+    else s += ':' + std::to_String(IDx);
 
-    if (rhint > 0) s += "(" + std::to_string(rhint - 4) + ")";
+    if (rhI32 > 0) s += "(" + std::to_String(rhI32 - 4) + ")";
 
     return s;
 
 }
 
-string bytecode::tostring(int alignment) const {
+String bytecode::toString(I32 alignment) const {
 
-    string s = "bytecode:\n\n";
+    String s = "bytecode:\n\n";
     auto i = iterate();
 
     while (!i.done()) {
 
-        s += indent(alignment + 1) + std::to_string(i.idx) + ".";
-        auto in = i.nextinstruction();
-        std::cout << "in int = " << (int)in << "\n";
+        s += indent(alignment + 1) + std::to_String(i.IDx) + ".";
+        auto in = i.nextInstruction();
+        std::cout << "in I32 = " << (int)in << "\n";
         s += instnames[(uint32_t)in];
         s += "\n";
         std::cout << "inst length = " << instlengths[(uint32_t)in] << "\n";
-        for (int _ = 0; _ < instlengths[(uint32_t)in]; _++) {
+        for (I32 _ = 0; _ < instlengths[(uint32_t)in]; _++) {
 
             auto addr = i.nextaddress();
             s += addr.print(alignment + 2);
@@ -992,22 +1533,22 @@ string bytecode::tostring(int alignment) const {
 
 }
 
-string internalcodeblock::tostring(int alignment) const {
+String internalCodeBlock::toString(I32 alignment) const {
 
-    string s = "\n" + indent(alignment);
+    String s = "\n" + indent(alignment);
     
-    if (ctype == functionblock) {
+    if (CType == FUNCTIONblock) {
 
-        auto func = (functioncodeblock*)this;
+        auto func = (FUNCTIONCodeBlock*)this;
 
-        s = string("function") + (func->isinline ? " (inline)" : "") +  ":\n\n";
+        s = String("FUNCTION") + (func->isinline ? " (inline)" : "") +  ":\n\n";
         s += indent(alignment + 1) + "arguments:\n\n";
 
-        int numargs = func->args.size();
-        for (int i = 0; i < numargs; i++) {
+        I32 numargs = func->args.size();
+        for (I32 i = 0; i < numargs; i++) {
 
-            s += indent(alignment + 2) + "variable T" + std::to_string(func->args[i].addr) + (func->passbyref[i] ? " (passed by reference)" : "") + " with dtype:\n\n";
-            s += func->args[i].dtype.print(alignment + 3) + "\n";
+            s += indent(alignment + 2) + "variable T" + std::to_String(func->args[i].addr) + (func->passbyref[i] ? " (passed by reference)" : "") + " with dType:\n\n";
+            s += func->args[i].type.print(alignment + 3) + "\n";
 
         }
 
@@ -1022,17 +1563,17 @@ string internalcodeblock::tostring(int alignment) const {
 
     }
 
-    else if (ctype == conditionalblock) {
+    else if (CType == conditionalblock) {
 
-        int codelen = code->size();
-        for (int i = 0; i < codelen; i++) s += (*code)[i]->print(alignment, i != codelen - 1);
+        I32 codelen = code->size();
+        for (I32 i = 0; i < codelen; i++) s += (*code)[i]->print(alignment, i != codelen - 1);
 
     }
 
     else {
 
-        if (ctype == whileblock) s += "while:\n\n";
-        else if (ctype == ifblock) s += "if:\n\n";
+        if (CType == whileblock) s += "while:\n\n";
+        else if (CType == ifblock) s += "if:\n\n";
         else s += "else:\n\n";
 
         for (auto c : *code) s += c->print(alignment + 1);
@@ -1043,43 +1584,43 @@ string internalcodeblock::tostring(int alignment) const {
 
 }
 
-string internalinstruction::tostring(int alignment) const {
+String internalInstruction::toString(I32 alignment) const {
 
-    string s;
+    String s;
 
-    if (lh) s += pad("T" + std::to_string(lh->addr), 4) + " =   ";
+    if (lh) s += pad("T" + std::to_String(lh->addr), 4) + " =   ";
     else s += "?    =   ";
     
-    s += pad(instnames[(int)opcode], 6) + " ";
+    s += pad(instnames[(int)Opcode], 6) + " ";
 
-    for (int i = 0; i < nargs; i++)
-        s += pad("T" + std::to_string(args[i]->addr), 4) + "  ";
+    for (I32 i = 0; i < nargs; i++)
+        s += pad("T" + std::to_String(args[i]->addr), 4) + "  ";
 
     return s;
 
 }
 
-string internalvariable::tostring(int alignment) const {
+String internalvariable::toString(I32 alignment) const {
 
     if (rh) return "";
-    return pad("T" + std::to_string(addr), 4) + " =   " + value.tostring(0);
+    return pad("T" + std::to_String(addr), 4) + " =   " + value.toString(0);
 
 }
 
-#define clearmaps(thetype) \
+#define clearMaps(TheType) \
 \
-thetype##kvmap.clear(); \
-thetype##vkmap.clear(); \
-thetype##nextfreeid = type::thetype + incrementid
+TheType##kvMap.clear(); \
+TheType##vkMap.clear(); \
+TheType##nextFreeID = Type::TheType + incrementID
 
-context::~context() {
+Context::~context() {
 
-    clearmaps(pointer);
-    clearmaps(array);
-    clearmaps(structure);
-    clearmaps(function);
+    clearMaps(POINTER);
+    clearMaps(ARRAY);
+    clearMaps(STRUCTURE);
+    clearMaps(FUNCTION);
 
-    curcontext = nullptr;
+    curContext = nullptr;
 
 }
 */

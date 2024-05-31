@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <vector>
+#include <set>
 #include <map>
 #include <string>
 #include <cstring>
@@ -94,10 +95,44 @@ namespace jitbox {
 
 #endif
 
-    struct Signature;
-                                                                                            // creates a 1-1 mapping between types and integer ids
-    struct Type : public Printable {	
+    struct Type;
 
+    namespace _internal { 
+        
+        const U8 numDerivedTypeClasses = 5;
+        const U8 numPrimitiveTypes = 10;
+                                                                                            // used internally to represent union types
+        struct CanonicalTypeSet {
+                                                                                            // union types are not counted for the purpose of this data structure, hence the minus one
+            const static U8 numDerivedTypes = numDerivedTypeClasses - 1;
+
+            Type derivedTypes[numDerivedTypes];
+            bool primitiveTypes[numPrimitiveTypes];
+
+            CanonicalTypeSet();
+
+            CanonicalTypeSet(const CanonicalTypeSet&);
+                                                                                            // allows usage in ordered maps
+            bool operator < (const CanonicalTypeSet&);
+
+            void merge(Type);
+
+            void merge(const CanonicalTypeSet&);
+
+            void intersect(Type);
+
+            void intersect(const CanonicalTypeSet&);
+
+            void negate();
+
+        };
+        
+    }
+
+    struct Signature;
+                                                                                            // creates a 1-1 mapping between integer ids and subsets of the type space
+    struct Type : public Printable {	
+        
         using List = Vec<Type>;
 
         enum : ID {
@@ -111,8 +146,8 @@ namespace jitbox {
             I8, I16, I32, I64, U8, U16, U32, U64, F32, F64,                                 
                                                                                             // abstract derived types
             POINTER, ARRAY, STRUCTURE, FUNCTION,
-                                                                                            // abstract logical operators on types
-            ANY, ALL, NOT 
+                                                                                            // abstract type representing a union of multiple types
+            UNION
 
         };
                                                                                             // default constructor; contains type::nothing
@@ -128,9 +163,9 @@ namespace jitbox {
                                                                                             // assigns an id to a function type based on a signature
         static Type Function(const Signature&);
                                                                                             // assigns an id to a union type based on the given typelist
-        static Type Any(const Vec<Type>&);
+        static Type Any(const Type::List&); static Type Or(Type, Type);
                                                                                             // assigns an id to an intersection type based on the given typelist
-        static Type All(const Vec<Type>&);
+        static Type All(const Type::List&); static Type And(Type, Type);
                                                                                             // assigns an id to a negation type based on the given type
         static Type Not(Type);
                                                                                             // returns the type that is being pointed to; throws an exception if not a pointer type
@@ -139,10 +174,14 @@ namespace jitbox {
         Type contains() const;
                                                                                             // returns the signature for this type; throws an exception if not a function or structure type
         const Signature& getSignature() const;
-                                                                                            // returns the typelist associated with this type; throws an exception if class is not ANY or ALL
-        const Vec<Type>& getList() const;
-                                                                                            // semantic asymmetrical type comparison, supports comparison of abstract and concrete types
-        Bool is(Type) const; Bool is(ID i) const;
+
+        Type Or(Type);
+
+        Type And(Type);
+
+        Type Not();
+                                                                                            // semantic type comparison, evaluates subset relationship between two subsets of the type space
+        Bool is(Type) const;
 
         ID getID() const;
                                                                                             // returns either nothing, anything, primitive, pointer, array, structure, or function
@@ -180,6 +219,13 @@ namespace jitbox {
     Bool operator != (ID, const Type&);
                                                                                             // needed in order to use an ordered map
     Bool operator < (const Type&, const Type&);
+
+    namespace _internal {
+
+        const U8 firstPrimitive = Type::I8;
+        const U8 firstDerivedTypeClass = Type::POINTER;
+
+    }
 
     struct Constant : public Printable {
 

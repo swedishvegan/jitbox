@@ -3,7 +3,7 @@
 #include "./Timer.hpp"
 
 using namespace jitbox;
-namespace jbi = jitbox::_internal; // short for 'jitbox internal'
+namespace jbi = jitbox::_internal;
 
 #define indentChar " "
 
@@ -36,34 +36,6 @@ String Printable::pad(String str, U16 padnum) {
 Error::Error(ErrorCode code) : code(code) { }
 
 #endif
-
-inline Bool Signature::operator < (const Signature& rh) const {
-     
-    if (identifier < rh.identifier) return true;
-    if (identifier > rh.identifier) return false;
-    if (returnType.getID() < rh.returnType.getID()) return true;
-    if (returnType.getID() > rh.returnType.getID()) return false;
-
-    return argTypes < rh.argTypes;
-
-}
-
-String Signature::toString(U8 alignment) const {
-
-    String s = "identifier:\n" + indent(alignment + 1) + std::to_string(identifier) + "\n";
-    s += indent(alignment) + "argument types:\n";
-
-    I32 numargs = argTypes.size();
-    for (I32 i = 0; i < numargs; i++) s += argTypes[i].print(alignment + 1, i != numargs - 1);
-
-    s += indent(alignment) + "return type\n";
-    s += Type(returnType).print(alignment + 1, false);
-
-    return s;
-
-}
-
-const ID incrementID = 7;
 
 template <typename KeyType>
 inline ID getValueFromKey(Map<KeyType, ID>& kvMap, Map<ID, KeyType>& vkMap, ID& nextFreeID, const KeyType& key) {
@@ -98,15 +70,110 @@ inline const KeyType* getKeyFromValue(Map<ID, KeyType>& vkMap, ID ID) {
 \
 Map<K, V> kvMap_##TheType; \
 Map<V, K> vkMap_##TheType; \
-ID nextFreeID_##TheType = Type::TheType + incrementID
+ID nextFreeID_##TheType = Type::TheType + jbi::numDerivedTypeClasses
 
 implementMaps(POINTER, ID, ID);
 implementMaps(ARRAY, ID, ID);
 implementMaps(STRUCTURE, Signature, ID);
 implementMaps(FUNCTION, Signature, ID);
-implementMaps(ANY, Type::List, ID);
-implementMaps(ALL, Type::List, ID);
-implementMaps(NOT, ID, ID);
+implementMaps(UNION, jbi::CanonicalTypeSet, ID);
+
+jbi::CanonicalTypeSet::CanonicalTypeSet() { 
+    
+    for (U8 i = 0; i < numDerivedTypes; i++) derivedTypes[i] = Type::NOTHING;
+    std::memset(primitiveTypes, false, sizeof(bool) * numPrimitiveTypes);
+
+}
+
+jbi::CanonicalTypeSet::CanonicalTypeSet(const CanonicalTypeSet& cts) { 
+    
+    std::memcpy(derivedTypes, cts.derivedTypes, sizeof(Type) * numDerivedTypes);
+    std::memcpy(primitiveTypes, cts.primitiveTypes, sizeof(bool) * numPrimitiveTypes);
+
+}
+
+bool jbi::CanonicalTypeSet::operator < (const CanonicalTypeSet& cts) {
+
+    for (U8 i = 0; i < numDerivedTypes; i++) {
+
+        if (derivedTypes[i] < cts.derivedTypes[i]) return true;
+        if (cts.derivedTypes[i] < derivedTypes[i]) return false;
+
+    }
+
+    for (U8 i = 0; i < numPrimitiveTypes; i++) {
+
+        if (primitiveTypes[i] < cts.primitiveTypes[i]) return true;
+        if (primitiveTypes[i] > cts.primitiveTypes[i]) return false;
+
+    }
+
+    return false;
+
+}
+
+void jbi::CanonicalTypeSet::merge(Type t) {
+
+    auto tClass = t.getClass();
+
+    if (tClass == Type::UNION) { merge(*getKeyFromValue(vkMap_UNION, t.getID())); return; }
+
+    if (tClass == Type::PRIMITIVE) { primitiveTypes[t.getID() - firstPrimitive] = true; return; }
+
+    auto matchingClass = tClass - firstDerivedTypeClass;
+
+    derivedTypes[matchingClass] = derivedTypes[matchingClass].Or(t);
+
+}
+
+void jbi::CanonicalTypeSet::merge(const CanonicalTypeSet& cts) {
+
+    for (U8 i = 0; i < numDerivedTypes; i++) derivedTypes[i] = derivedTypes[i].Or(cts.derivedTypes[i]);
+    for (U8 i = 0; i < numPrimitiveTypes; i++) primitiveTypes[i] = primitiveTypes[i] || cts.primitiveTypes[i];
+
+}
+
+void jbi::CanonicalTypeSet::intersect(Type t) {
+
+    auto tClass = t.getClass();
+
+    if (tClass == Type::UNION) { intersect(*getKeyFromValue(vkMap_UNION, t.getID())); return; }
+
+    if (tClass == Type::PRIMITIVE) { 
+        
+        std::memset(primitiveTypes, false, sizeof(bool) * numPrimitiveTypes); 
+        primitiveTypes[t.getID() - firstPrimitive] = true; 
+        
+        return;
+        
+    }
+
+    auto matchingClass = tClass - firstDerivedTypeClass;
+
+    derivedTypes[matchingClass] = derivedTypes[matchingClass].And(t);
+
+}
+
+void jbi::CanonicalTypeSet::intersect(const CanonicalTypeSet& cts) {
+
+    for (U8 i = 0; i < numDerivedTypes; i++) derivedTypes[i] = derivedTypes[i].And(cts.derivedTypes[i]);
+    for (U8 i = 0; i < numPrimitiveTypes; i++) primitiveTypes[i] = primitiveTypes[i] && cts.primitiveTypes[i];
+
+}
+
+void jbi::CanonicalTypeSet::negate() {
+
+    CanonicalTypeSet ctsNew;
+
+    for (U8 i = 0; i < numDerivedTypes; i++) ctsNew.derivedTypes[i] = 
+        (derivedTypes[i] == Type::NOTHING) 
+            ? firstDerivedTypeClass + i 
+            : derivedTypes[i].Not()
+        ;
+    
+    for (U8 i = 0; i < numPrimitiveTypes; i++) primitiveTypes[i] = !primitiveTypes[i];
+    
+}
 
 Type::Type() { }
 
@@ -114,7 +181,7 @@ Type::Type() { }
 \
 case Type::TheType: \
     \
-    if (!getKeyFromValue<KeyType>(vkMap_##TheType, identifier)) throw Error(Error::INVALID_TYPE_ID); \
+    if (!getKeyFromValue(vkMap_##TheType, identifier)) throw Error(Error::INVALID_TYPE_ID); \
     break;
 
 Type::Type(ID identifier) : identifier(identifier) {
@@ -129,9 +196,7 @@ Type::Type(ID identifier) : identifier(identifier) {
         validateTypeID(ARRAY, ID);
         validateTypeID(STRUCTURE, Signature);
         validateTypeID(FUNCTION, Signature);
-        validateTypeID(ANY, Type::List);
-        validateTypeID(ALL, Type::List);
-        validateTypeID(NOT, ID);
+        validateTypeID(UNION, jbi::CanonicalTypeSet);
 
     }
 
@@ -153,31 +218,52 @@ Bool jitbox::operator != (ID lh, const Type& rh) { return lh != rh.getID(); }
 
 Bool jitbox::operator < (const Type& lh, const Type& rh) { return lh.getID() < rh.getID(); }
 
-#define makeType(TheType, TheType2, ArgType, FullArgType) \
-Type Type::TheType2(FullArgType arg) { return Type(getValueFromKey<ArgType>(kvMap_##TheType, vkMap_##TheType, nextFreeID_##TheType, arg)); }
+Type Type::Pointer(Type t) { return Type(getValueFromKey(kvMap_POINTER, vkMap_POINTER, nextFreeID_POINTER, t.getID())); }
 
-Type Type::Pointer(Type t) { return Type(getValueFromKey<ID>(kvMap_POINTER, vkMap_POINTER, nextFreeID_POINTER, t.getID())); }
+Type Type::Array(Type t) { return Type(getValueFromKey(kvMap_ARRAY, vkMap_ARRAY, nextFreeID_ARRAY, t.getID())); }
 
-Type Type::Array(Type t) { return Type(getValueFromKey<ID>(kvMap_ARRAY, vkMap_ARRAY, nextFreeID_ARRAY, t.getID())); }
+Type Type::Structure(const Signature& s) { return Type(getValueFromKey(kvMap_STRUCTURE, vkMap_STRUCTURE, nextFreeID_STRUCTURE, s)); }
 
-Type Type::Structure(const Signature& s) { return Type(getValueFromKey<Signature>(kvMap_STRUCTURE, vkMap_STRUCTURE, nextFreeID_STRUCTURE, s)); }
+Type Type::Function(const Signature& s) { return Type(getValueFromKey(kvMap_FUNCTION, vkMap_FUNCTION, nextFreeID_FUNCTION, s)); }
 
-Type Type::Function(const Signature& s) { return Type(getValueFromKey<Signature>(kvMap_FUNCTION, vkMap_FUNCTION, nextFreeID_FUNCTION, s)); }
+Type Type::Any(const Type::List& tl) {
 
-Type Type::Any(const Type::List& tl) { return Type(getValueFromKey<Type::List>(kvMap_ANY, vkMap_ANY, nextFreeID_ANY, tl)); }
+    bool multipleClasses = false;
+    ID lastClass = -1;
 
-Type Type::All(const Type::List& tl) { return Type(getValueFromKey<Type::List>(kvMap_ALL, vkMap_ALL, nextFreeID_ALL, tl)); }
+    for (auto t : tl) {
 
-Type Type::Not(Type t) {
+        auto tid = t.getID();
 
-    if (t.typeClass == NOT) return Type(*getKeyFromValue<ID>(vkMap_NOT, t.getID()));
-    else return Type(getValueFromKey<ID>(kvMap_NOT, vkMap_NOT, nextFreeID_NOT, t.getID()));
+        if (tid == ANYTHING) return ANYTHING;
+
+        if (lastClass < 0) lastClass = tid;
+        else if (lastClass != tid) multipleClasses = true;
+
+    }
+
+    if (!multipleClasses) {
+
+        switch (lastClass) {
+
+            case NOTHING: return NOTHING;
+            
+            case UNION: {
+
+                Type::Set s;
+
+                TODO: Add exception for max recursion depth exceeded
+            }
+
+        }
+
+    }
 
 }
 
 #define makeTypeGetter(TheType, getter, KeyType, rettype) \
 \
-rettype Type::getter() const { return *getKeyFromValue<KeyType>(vkMap_##TheType, identifier); }
+rettype Type::getter() const { return *getKeyFromValue(vkMap_##TheType, identifier); }
 
 Type Type::pointsTo() const {
 
@@ -185,7 +271,7 @@ Type Type::pointsTo() const {
     if (typeClass != POINTER) throw Error(Error::TYPE_GETTER_MISMATCH);
 #endif
 
-    return *getKeyFromValue<ID>(vkMap_POINTER, identifier);
+    return *getKeyFromValue(vkMap_POINTER, identifier);
 
 }
 
@@ -195,7 +281,7 @@ Type Type::contains() const {
     if (typeClass != ARRAY) throw Error(Error::TYPE_GETTER_MISMATCH);
 #endif
 
-    return *getKeyFromValue<ID>(vkMap_ARRAY, identifier);
+    return *getKeyFromValue(vkMap_ARRAY, identifier);
 
 }
 
@@ -205,7 +291,7 @@ const Signature& Type::getSignature() const {
     if (typeClass != FUNCTION && typeClass != STRUCTURE) throw Error(Error::TYPE_GETTER_MISMATCH);
 #endif
 
-    return *getKeyFromValue<Signature>((typeClass == FUNCTION) ? vkMap_FUNCTION : vkMap_STRUCTURE, identifier);
+    return *getKeyFromValue((typeClass == FUNCTION) ? vkMap_FUNCTION : vkMap_STRUCTURE, identifier);
 
 }
 
@@ -215,7 +301,7 @@ const Type::List& Type::getList() const {
     if (typeClass != ANY && typeClass != ALL) throw Error(Error::TYPE_GETTER_MISMATCH);
 #endif
 
-    return *getKeyFromValue<Type::List>((typeClass == ANY) ? vkMap_ANY : vkMap_ALL, identifier);
+    return *getKeyFromValue((typeClass == ANY) ? vkMap_ANY : vkMap_ALL, identifier);
 
 }
 
@@ -493,6 +579,32 @@ String Constant::toString(U8) const {
         else if (type == Type::F64) s = std::to_string(vF64);
 
     }
+
+    return s;
+
+}
+
+inline Bool Signature::operator < (const Signature& rh) const {
+     
+    if (identifier < rh.identifier) return true;
+    if (identifier > rh.identifier) return false;
+    if (returnType.getID() < rh.returnType.getID()) return true;
+    if (returnType.getID() > rh.returnType.getID()) return false;
+
+    return argTypes < rh.argTypes;
+
+}
+
+String Signature::toString(U8 alignment) const {
+
+    String s = "identifier:\n" + indent(alignment + 1) + std::to_string(identifier) + "\n";
+    s += indent(alignment) + "argument types:\n";
+
+    I32 numargs = argTypes.size();
+    for (I32 i = 0; i < numargs; i++) s += argTypes[i].print(alignment + 1, i != numargs - 1);
+
+    s += indent(alignment) + "return type\n";
+    s += Type(returnType).print(alignment + 1, false);
 
     return s;
 

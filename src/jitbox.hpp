@@ -32,6 +32,9 @@ namespace jitbox {
     template <typename T>
     using Vec = std::vector<T>;
 
+    template <typename T>
+    using Set = std::set<T>;
+
     template <typename K, typename V>
     using Map = std::map<K, V>;
 
@@ -107,7 +110,12 @@ namespace jitbox {
             const static U8 numDerivedTypes = numDerivedTypeClasses - 1;
 
             Type derivedTypes[numDerivedTypes];
+
             bool primitiveTypes[numPrimitiveTypes];
+
+            Set<Type> signatureTypes;
+
+            bool signatureTypesNegated = false;
 
             CanonicalTypeSet();
 
@@ -154,6 +162,8 @@ namespace jitbox {
         Type();                                                                         
                                                                                             // basic constructor; will throw an error if the id supplied is invalid and JITBOX_DEBUG is defined
         Type(ID);
+
+        Type(const Type&) = default;
                                                                                             // assigns an id to a pointer type based on the type that is being pointed to
         static Type Pointer(Type);
                                                                                             // assigns an id to an array type based on the type that the array contains
@@ -255,9 +265,9 @@ namespace jitbox {
         String toString(U8) const override;
 
     };
-                                                                                            // each user-defined function or structure gets a unique signature
+                                                                                            // each user-defined function or structure gets a unique signature; they are automatically generated and the user is not allowed to directly construct a signature object
     struct Signature : public Printable {					                                
-                                                                                            // a typelist alone is not sufficient to distinguish signatures -- after all, two functions could have the same argument types, but they should still not be considered the same function
+                                                                                            // uniquely identifies each signature
         ID identifier;										                                
                                                                                             // either represents function arguments or struct members
         Type::List argTypes; 
@@ -267,6 +277,10 @@ namespace jitbox {
         Bool operator < (const Signature&) const;
 
         String toString(U8) const override;
+
+    protected:
+
+        Signature();
 
     };
 

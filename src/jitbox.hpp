@@ -1,6 +1,7 @@
 #ifndef JITBOX_HPP
 #define JITBOX_HPP
 
+#include <utility>
 #include <cstdint>
 #include <vector>
 #include <set>
@@ -98,9 +99,12 @@ namespace jitbox {
 
 #endif
 
-    struct Type;
+    struct Type; struct StructureSignature; struct FunctionSignature;
 
     namespace _internal { 
+
+        using StructureData = std::pair<ID, StructureSignature>;
+        using FunctionData = FunctionSignature;
         
         const U8 numDerivedTypeClasses = 5;
         const U8 numPrimitiveTypes = 10;
@@ -111,17 +115,17 @@ namespace jitbox {
 
             Type derivedTypes[numDerivedTypes];
 
-            bool primitiveTypes[numPrimitiveTypes];
+            Bool primitiveTypes[numPrimitiveTypes];
 
-            Set<Type> signatureTypes;
+            Set<Type> structureTypes;
 
-            bool signatureTypesNegated = false;
+            Bool signatureTypesNegated = false;
 
             CanonicalTypeSet();
 
             CanonicalTypeSet(const CanonicalTypeSet&);
                                                                                             // allows usage in ordered maps
-            bool operator < (const CanonicalTypeSet&);
+            Bool operator < (const CanonicalTypeSet&);
 
             void merge(Type);
 
@@ -136,12 +140,12 @@ namespace jitbox {
         };
         
     }
-
-    struct Signature;
                                                                                             // creates a 1-1 mapping between integer ids and subsets of the type space
     struct Type : public Printable {	
-        
+                                                                                            // ordered list of types; repeats allowed
         using List = Vec<Type>;
+                                                                                            // unordered set of types; repeats not counted
+        using Set = Set<Type>;
 
         enum : ID {
                                                                                             // used for void functions
@@ -164,26 +168,34 @@ namespace jitbox {
         Type(ID);
 
         Type(const Type&) = default;
+                                                                                            // assigns an id to a tuple type based on the list of types provided
+        static Type Tuple(const List&);
                                                                                             // assigns an id to a pointer type based on the type that is being pointed to
         static Type Pointer(Type);
                                                                                             // assigns an id to an array type based on the type that the array contains
         static Type Array(Type);
-                                                                                            // assigns an id to a structure type based on a signature
-        static Type Structure(const Signature&);
-                                                                                            // assigns an id to a function type based on a signature
-        static Type Function(const Signature&);
+                                                                                            // assigns an id to a function type
+        static Type Function(const FunctionSignature&); 
+                                                                                            // assigns an id to a function type; throws an exception if arguments is not a tuple type      
+        static Type Function(Type arguments, Type returnType); 
+                                                                                            // assigns an id to a function type        
+        static Type Function(const List& arguments, Type returnType);
                                                                                             // assigns an id to a union type based on the given typelist
-        static Type Any(const Type::List&); static Type Or(Type, Type);
+        static Type Any(const List&); static Type Or(Type, Type);
                                                                                             // assigns an id to an intersection type based on the given typelist
-        static Type All(const Type::List&); static Type And(Type, Type);
+        static Type All(const List&); static Type And(Type, Type);
                                                                                             // assigns an id to a negation type based on the given type
         static Type Not(Type);
+                                                                                            // returns a list of the members of this type; throws an exception if not a tuple type
+        const List& members() const;
                                                                                             // returns the type that is being pointed to; throws an exception if not a pointer type
         Type pointsTo() const;
                                                                                             // returns the type that the array contains; throws an exception if not an array type
         Type contains() const;
-                                                                                            // returns the signature for this type; throws an exception if not a function or structure type
-        const Signature& getSignature() const;
+                                                                                            // returns the structure signature for this type; throws an exception if not a structure type
+        const StructureSignature& getStructureSignature() const;
+                                                                                            // returns the function signature for this type; throws an exception if not a function type
+        const FunctionSignature& getFunctionSignature() const;
 
         Type Or(Type);
 
@@ -213,6 +225,9 @@ namespace jitbox {
 
         ID identifier = NOTHING;
         ID typeClass = NOTHING;
+
+                                                                                            // assigns an id to a structure type
+        static Type Structure(const StructureSignature&);
 
         void determineClass();
 
@@ -265,14 +280,8 @@ namespace jitbox {
         String toString(U8) const override;
 
     };
-                                                                                            // each user-defined function or structure gets a unique signature; they are automatically generated and the user is not allowed to directly construct a signature object
-    struct Signature : public Printable {					                                
-                                                                                            // uniquely identifies each signature
-        ID identifier;										                                
-                                                                                            // either represents function arguments or struct members
-        Type::List argTypes; 
-                                                                                            // only relevant for function signatures
-        Type returnType;									                                
+
+    struct Signature : public Printable {
 
         Bool operator < (const Signature&) const;
 
@@ -280,7 +289,36 @@ namespace jitbox {
 
     protected:
 
-        Signature();
+        Signature(Type, Type, bool);
+
+        Type t1, t2;
+        bool isFunction;
+
+    };
+
+    struct StructureSignature : public Signature {
+
+        const Type::Set& getParents() const;
+
+        Type getParentsType() const;
+
+        const Type::List& getMembers() const;
+
+        Type getMembersType() const;
+
+    };
+
+    struct FunctionSignature : public Signature {
+                                                                                            // arguments should be a tuple type, and returnType can be any type
+        FunctionSignature(Type arguments, Type returnType);
+
+        FunctionSignature(Type::List& arguments, Type returnType);
+
+        const Type::List& getArguments() const;
+
+        Type getArgumentsType() const;
+
+        Type getReturnType() const;
 
     };
 
@@ -291,133 +329,132 @@ namespace jitbox {
 
         template <typename PtrType>
         struct Ptr;
-                                                                                                // bytecode instruction set
-        enum Opcode : U8 {                                                                      
-
-                                                                                                // arguments: 1, purpose: marks the beginning of a function
+                                                                                            // bytecode instruction set
+        enum Opcode : U8 {                                                                     
+                                                                                            // arguments: 1, purpose: marks the beginning of a function
             BEGFNC, 
-                                                                                                // arguments: 0, purpose: marks the end of a function 
+                                                                                            // arguments: 0, purpose: marks the end of a function 
             ENDFNC, 
-                                                                                                // arguments: 2, purpose: marks arg1 as the owner of arg2, so that changes in arg2 are reflected in arg1
+                                                                                            // arguments: 2, purpose: marks arg1 as the owner of arg2, so that changes in arg2 are reflected in arg1
             ALIAS,  
-                                                                                                // arguments: 1, purpose: marks arg1 as an argument in a function call
+                                                                                            // arguments: 1, purpose: marks arg1 as an argument in a function call
             FARG,   
-                                                                                                // arguments: 1, purpose: tells the JIT that arg1 is an argument and does not need to be allocated because the caller already allocated it (its runtime address is inferred by the order that these instructions are generated)
+                                                                                            // arguments: 1, purpose: tells the JIT that arg1 is an argument and does not need to be allocated because the caller already allocated it (its runtime address is inferred by the order that these instructions are generated)
             REGARG, 
-                                                                                                // arguments: 2, purpose: hints to the JIT to try to allocate arg1 in argument register arg2
+                                                                                            // arguments: 2, purpose: hints to the JIT to try to allocate arg1 in argument register arg2
             RHINT,  
-                                                                                                // arguments: 1, purpose: hints to the JIT that arg1 should be placed in a register
+                                                                                            // arguments: 1, purpose: hints to the JIT that arg1 should be placed in a register
             HOT,    
-                                                                                                // arguments: 0, purpose: marks the beginning of loop mode
+                                                                                            // arguments: 0, purpose: marks the beginning of loop mode
             BEGLP,  
-                                                                                                // arguments: 0, purpose: marks the end of loop mode
+                                                                                            // arguments: 0, purpose: marks the end of loop mode
             ENDLP,  
-                                                                                                // arguments: 1, purpose: tells the JIT that arg1 is no longer in use and its address can be used by another live variable
+                                                                                            // arguments: 1, purpose: tells the JIT that arg1 is no longer in use and its address can be used by another live variable
             RFREE,  
-                                                                                                // arguments: 1, purpose: terminates the program with code arg1
+                                                                                            // arguments: 1, purpose: terminates the program with code arg1
             EXIT,   
-                                                                                                // arguments: 1, purpose: sets the IP to arg1
+                                                                                            // arguments: 1, purpose: sets the IP to arg1
             J,      
-                                                                                                // arguments: 2, purpose: sets the IP to arg1 iff arg2 == 0
+                                                                                            // arguments: 2, purpose: sets the IP to arg1 iff arg2 == 0
             JZ,     
-                                                                                                // arguments: 2, purpose: sets the IP to arg1 iff arg2 != 0
+                                                                                            // arguments: 2, purpose: sets the IP to arg1 iff arg2 != 0
             JNZ,    
-                                                                                                // arguments: 3, purpose: sets the IP to arg1 iff arg2 == arg3
+                                                                                            // arguments: 3, purpose: sets the IP to arg1 iff arg2 == arg3
             JE,     
-                                                                                                // arguments: 3, purpose: sets the IP to arg1 iff arg2 != arg3
+                                                                                            // arguments: 3, purpose: sets the IP to arg1 iff arg2 != arg3
             JNE,    
-                                                                                                // arguments: 3, purpose: sets the IP to arg1 iff arg2 > arg3
+                                                                                            // arguments: 3, purpose: sets the IP to arg1 iff arg2 > arg3
             JG,     
-                                                                                                // arguments: 3, purpose: sets the IP to arg1 iff arg2 >= arg3
+                                                                                            // arguments: 3, purpose: sets the IP to arg1 iff arg2 >= arg3
             JGE,    
-                                                                                                // arguments: 1, purpose: calls the function arg1
+                                                                                            // arguments: 1, purpose: calls the function arg1
             CALLV,  
-                                                                                                // arguments: 2, purpose: calls the function arg1 and stores the result in arg2
+                                                                                            // arguments: 2, purpose: calls the function arg1 and stores the result in arg2
             CALL,   
-                                                                                                // arguments: 0, purpose: sets the IP to the value on top of the stack
+                                                                                            // arguments: 0, purpose: sets the IP to the value on top of the stack
             RETV,   
-                                                                                                // arguments: 1, purpose: moves arg1 into the return register and sets the IP to the value on top of the stack
+                                                                                            // arguments: 1, purpose: moves arg1 into the return register and sets the IP to the value on top of the stack
             RET,    
-                                                                                                // arguments: 2, purpose: allocates arg1 bytes on the heap and sets arg2 to the new allocated address
+                                                                                            // arguments: 2, purpose: allocates arg1 bytes on the heap and sets arg2 to the new allocated address
             HALLOC, 
-                                                                                                // arguments: 2, purpose: allocates arg1 bytes on the heap, zeros the newly allocated memory, and sets arg2 to the new allocated address
+                                                                                            // arguments: 2, purpose: allocates arg1 bytes on the heap, zeros the newly allocated memory, and sets arg2 to the new allocated address
             HINIT,  
-                                                                                                // arguments: 3, purpose: copies arg1 bytes from arg2 into arg3 
+                                                                                            // arguments: 3, purpose: copies arg1 bytes from arg2 into arg3 
             COPY,   
-                                                                                                // arguments: 2, purpose: moves the value of arg1 into arg2
+                                                                                            // arguments: 2, purpose: moves the value of arg1 into arg2
             MOV,    
-                                                                                                // arguments: 4, purpose: moves the value of either arg1 or arg2 into arg3 depending on whether arg4 == 0
+                                                                                            // arguments: 4, purpose: moves the value of either arg1 or arg2 into arg3 depending on whether arg4 == 0
             MOVZ,   
-                                                                                                // arguments: 4, purpose: moves the value of either arg1 or arg2 into arg3 depending on whether arg4 != 0
+                                                                                            // arguments: 4, purpose: moves the value of either arg1 or arg2 into arg3 depending on whether arg4 != 0
             MOVNZ,  
-                                                                                                // arguments: 5, purpose: moves the value of either arg1 or arg2 into arg3 depending on whether arg4 == arg5
+                                                                                            // arguments: 5, purpose: moves the value of either arg1 or arg2 into arg3 depending on whether arg4 == arg5
             MOVE,   
-                                                                                                // arguments: 5, purpose: moves the value of either arg1 or arg2 into arg3 depending on whether arg4 != arg5
+                                                                                            // arguments: 5, purpose: moves the value of either arg1 or arg2 into arg3 depending on whether arg4 != arg5
             MOVNE,  
-                                                                                                // arguments: 5, purpose: moves the value of either arg1 or arg2 into arg3 depending on whether arg4 > arg5
+                                                                                            // arguments: 5, purpose: moves the value of either arg1 or arg2 into arg3 depending on whether arg4 > arg5
             MOVG,   
-                                                                                                // arguments: 5, purpose: moves the value of either arg1 or arg2 into arg3 depending on whether arg4 >= arg5
+                                                                                            // arguments: 5, purpose: moves the value of either arg1 or arg2 into arg3 depending on whether arg4 >= arg5
             MOVGE,  
-                                                                                                // arguments: 2, purpose: moves the address of arg1 into arg2
+                                                                                            // arguments: 2, purpose: moves the address of arg1 into arg2
             REF,    
-                                                                                                // arguments: 2, purpose: moves the value in the address referenced by arg1 into arg2
+                                                                                            // arguments: 2, purpose: moves the value in the address referenced by arg1 into arg2
             DEREF,  
-                                                                                                // arguments: 2, purpose: moves the byte size of the heap object at the address referenced by arg1 into arg2
+                                                                                            // arguments: 2, purpose: moves the byte size of the heap object at the address referenced by arg1 into arg2
             OBJLEN, 
-                                                                                                // arguments: 2, purpose: casts arg1 to a new type and stores the result in arg2
+                                                                                            // arguments: 2, purpose: casts arg1 to a new type and stores the result in arg2
             CAST,   
-                                                                                                // arguments: 3, purpose: stores the sum of arg1 and arg2 in arg3
+                                                                                            // arguments: 3, purpose: stores the sum of arg1 and arg2 in arg3
             ADD,    
-                                                                                                // arguments: 3, purpose: stores the difference of arg1 and arg2 in arg3
+                                                                                            // arguments: 3, purpose: stores the difference of arg1 and arg2 in arg3
             SUB,    
-                                                                                                // arguments: 3, purpose: stores the product of arg1 and arg2 in arg3
+                                                                                            // arguments: 3, purpose: stores the product of arg1 and arg2 in arg3
             MUL,    
-                                                                                                // arguments: 3, purpose: stores the quotient of arg1 and arg2 in arg3
+                                                                                            // arguments: 3, purpose: stores the quotient of arg1 and arg2 in arg3
             DIV,    
-                                                                                                // arguments: 3, purpose: stores the remainder of dividing arg1 by arg2 in arg3
+                                                                                            // arguments: 3, purpose: stores the remainder of dividing arg1 by arg2 in arg3
             MOD,    
-                                                                                                // arguments: 3, purpose: stores the bitwise AND of arg1 and arg2 in arg3
+                                                                                            // arguments: 3, purpose: stores the bitwise AND of arg1 and arg2 in arg3
             BAND,   
-                                                                                                // arguments: 3, purpose: stores the bitwise OR of arg1 and arg2 in arg3
+                                                                                            // arguments: 3, purpose: stores the bitwise OR of arg1 and arg2 in arg3
             BOR,    
-                                                                                                // arguments: 3, purpose: stores the bitwise XOR of arg1 and arg2 in arg3
+                                                                                            // arguments: 3, purpose: stores the bitwise XOR of arg1 and arg2 in arg3
             BXOR,   
-                                                                                                // arguments: 2, purpose: stores the bitwise NOT of arg1 in arg2
+                                                                                            // arguments: 2, purpose: stores the bitwise NOT of arg1 in arg2
             BNOT,   
-                                                                                                // arguments: 2, purpose: stores the Boolean value arg1 == 0 in arg2
+                                                                                            // arguments: 2, purpose: stores the Boolean value arg1 == 0 in arg2
             ZERO,   
-                                                                                                // arguments: 2, purpose: stores the Boolean value arg1 != 0 in arg2
+                                                                                            // arguments: 2, purpose: stores the Boolean value arg1 != 0 in arg2
             NZERO,  
-                                                                                                // arguments: 3, purpose: stores the Boolean value arg1 == arg2 in arg3
+                                                                                            // arguments: 3, purpose: stores the Boolean value arg1 == arg2 in arg3
             EQ,     
-                                                                                                // arguments: 3, purpose: stores the Boolean value arg1 != arg2 in arg3
+                                                                                            // arguments: 3, purpose: stores the Boolean value arg1 != arg2 in arg3
             NEQ,    
-                                                                                                // arguments: 3, purpose: stores the Boolean value arg1 > arg2 in arg3
+                                                                                            // arguments: 3, purpose: stores the Boolean value arg1 > arg2 in arg3
             GT,     
-                                                                                                // arguments: 3, purpose: stores the Boolean value arg1 >= arg2 in arg3
+                                                                                            // arguments: 3, purpose: stores the Boolean value arg1 >= arg2 in arg3
             GTE,    
-                                                                                                // arguments: 3, purpose: stores the bitwise left-shift of arg1 by arg2 in arg3
+                                                                                            // arguments: 3, purpose: stores the bitwise left-shift of arg1 by arg2 in arg3
             SHL,    
-                                                                                                // arguments: 3, purpose: stores the bitwise right-shift of arg1 by arg2 in arg3
+                                                                                            // arguments: 3, purpose: stores the bitwise right-shift of arg1 by arg2 in arg3
             SHR,    
-                                                                                                // arguments: 3, purpose: stores the bitwise left-rotation of arg1 by arg2 in arg3
+                                                                                            // arguments: 3, purpose: stores the bitwise left-rotation of arg1 by arg2 in arg3
             ROTL,   
-                                                                                                // arguments: 3, purpose: stores the bitwise right-rotation of arg1 by arg2 in arg3
+                                                                                            // arguments: 3, purpose: stores the bitwise right-rotation of arg1 by arg2 in arg3
             ROTR,   
-                                                                                                // number of instructions
+                                                                                            // number of instructions
             _length 
 
         };
 
         extern const U8 instructionLengths[];
         extern CString instructionNames[];
-                                                                                                // base class for instruction, variable, and codeblock -- the three top-level objects that make up the jitbox intermediate representation
+                                                                                            // base class for instruction, variable, and codeblock -- the three top-level objects that make up the jitbox intermediate representation
         struct CompilerObject {                                                                 
 
             enum : U8 { INSTRUCTION, VARIABLE, CODEBLOCK }; 
             
             U8 objectType;                                                                                    
-                                                                                                // offset of this object within its parent codeblock if this object is an instruction or codeblock; ignored if this object is a variable
+                                                                                            // offset of this object within its parent codeblock if this object is an instruction or codeblock; ignored if this object is a variable
             U32 index = 0;                                                                      
 
             CompilerObject(U8 objectType);
@@ -428,9 +465,9 @@ namespace jitbox {
 
         struct Variable;
         struct Context;
-                                                                                                // intermediate representation for a single instruction; consists of an opcode and an array of instructions
+                                                                                            // intermediate representation for a single instruction; consists of an opcode and an array of instructions
         struct Instruction : public CompilerObject {                                            
-                                                                                                // maximum number of arguments of any instruction
+                                                                                            // maximum number of arguments of any instruction
             static const U8 MAX_NUM_ARGS = 5;   
 
             Opcode op;        
@@ -438,7 +475,7 @@ namespace jitbox {
             SSAID args[MAX_NUM_ARGS];
         
             Type type;
-                                                                                                // this constructor should never be called anywhere except in the codeblock::addinstruction function
+                                                                                            // this constructor should never be called anywhere except in the codeblock::addinstruction function
             Instruction(Opcode, Type, Variable** srcArgs, I8 nargs);
 
         };
@@ -453,7 +490,7 @@ namespace jitbox {
 
             SSAID identifier;
             Constant val;
-                                                                                                // RH value that is assigned to this variable
+                                                                                            // RH value that is assigned to this variable
             Instruction* rh;   
 
             Variable();
@@ -492,31 +529,31 @@ namespace jitbox {
         };
 
         struct CodeBlock : public CompilerObject, public Printable {
-                                                                                                // contains all variables in the function that this codeblock belongs to; memory is allocated and deleted by the top-level scope codeblock
+                                                                                            // contains all variables in the function that this codeblock belongs to; memory is allocated and deleted by the top-level scope codeblock
             Vec<pCompilerObject> code;
         
             Vec<pVariable>* variables;                                                          
-                                                                                                // type id associated with this function
+                                                                                            // type id associated with this function
             Type type;
-                                                                                                // the ID associated with this function's signature (or zero if this codeblock is a child of another codeblock)
+                                                                                            // the ID associated with this function's signature (or zero if this codeblock is a child of another codeblock)
             ID identifier = 0;
 
             Context* owner;
-                                                                                                // the starting index of this codeblock relative to its parent's starting index
+                                                                                            // the starting index of this codeblock relative to its parent's starting index
             U32 begIdx = 0;
-                                                                                                // current active scope within this function
+                                                                                            // current active scope within this function
             CodeBlock* curScope = nullptr;
-                                                                                                // current innermost active loop within the current function; might be nullptr
+                                                                                            // current innermost active loop within the current function; might be nullptr
             CodeBlock* curLoop = nullptr;
-                                                                                                // adds an instruction to this codeblock
+                                                                                            // adds an instruction to this codeblock
             Instruction* addInstruction(Opcode, Variable** args, U8 nargs);
-                                                                                                // adds a variable to this codeblock
+                                                                                            // adds a variable to this codeblock
             Variable* addVariable(Type);
-                                                                                                // adds a constant to this codeblock
+                                                                                            // adds a constant to this codeblock
             Variable* addConstant(Constant);
-                                                                                                // adds a variable assignment to this codeblock
+                                                                                            // adds a variable assignment to this codeblock
             void addAssignment(Variable* lh, Instruction* rh);
-                                                                                                // infers expected data type that an instruction will return based on its input arguments, performing implicit typecasting if the current context permits it; also checks that argument types are legal if JITBOX_DEBUG is defined (if nargs is -1 this means that the given argument is the LH of an assignment)
+                                                                                            // infers expected data type that an instruction will return based on its input arguments, performing implicit typecasting if the current context permits it; also checks that argument types are legal if JITBOX_DEBUG is defined (if nargs is -1 this means that the given argument is the LH of an assignment)
             Type inferType(Opcode, Variable** args, U8 nargs);
 
             enum : U8 {
@@ -546,13 +583,13 @@ namespace jitbox {
 
             Vec<pCodeBlock> functions;
             Vec<pVariable> variables;
-                                                                                                // current function being compiled within this context
+                                                                                            // current function being compiled within this context
             CodeBlock* curFunction = nullptr;                                                                                                        
 
             CodeBlock* addFunction(const Type::List& argtypes, Type returntype);
-                                                                                                // adds global variable to the current context and initializes it to the value of v
+                                                                                            // adds global variable to the current context and initializes it to the value of v
             Variable* addGlobalVariable(Variable* v);
-                                                                                                // adds global variable to the current context
+                                                                                            // adds global variable to the current context
             Variable* addGlobalVariable(Constant);
 
             static Context* curContext();

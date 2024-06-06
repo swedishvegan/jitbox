@@ -255,6 +255,7 @@ Type Type::Any(const Type::List& tl) {
                 TODO: Add exception for max recursion depth exceeded
                 TODO: Signature comparison is only based on ID
                 TODO: Don't even expose signature constructor to the user
+                TODO: Make everyting const that can be made const
             }
 
         }

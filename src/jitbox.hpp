@@ -1,7 +1,6 @@
 #ifndef JITBOX_HPP
 #define JITBOX_HPP
 
-#include <utility>
 #include <cstdint>
 #include <vector>
 #include <set>
@@ -14,6 +13,7 @@
 //// namespace _internal ==> private internal api
 
 #define JITBOX_DEBUG
+#define JITBOX_SIMPLIFY_TUPLE_REPRESENTATION
 
 namespace jitbox {
 
@@ -65,7 +65,7 @@ namespace jitbox {
 
     struct Error {
 
-        enum : ErrorCode{     
+        enum : ErrorCode {     
                                                                                             // no error
             OK,                                                                
                                                                                             // a type constructor was called using an invalid id
@@ -99,16 +99,32 @@ namespace jitbox {
 
 #endif
 
-    struct Type; struct StructureSignature; struct FunctionSignature;
+    struct Type; struct Signature;
 
-    namespace _internal { 
-
-        using StructureData = std::pair<ID, StructureSignature>;
-        using FunctionData = FunctionSignature;
+    namespace _internal {
         
         const U8 numDerivedTypeClasses = 5;
+
         const U8 numPrimitiveTypes = 10;
-                                                                                            // used internally to represent union types
+                                                                                            // subset of the tuple type space, with support for union, intersection, and negation
+        struct TupleSet {
+
+            Set<Type> elements;
+                                                                                            // argument must be a tuple type
+            void merge(Type);
+                                        
+            void merge(const TupleSet&);
+                                                                                            // argument must be a tuple type
+            void intersect(Type);
+
+            void intersect(const TupleSet&);
+
+            void negate();
+                                                                                            // if JITBOX_SIMPLIFY_TUPLE_REPRESENTATION is defined then this function will try to eliminate redundant elements
+            void insertElement(Type);
+
+        };
+                                                                                            // used internally to represent generalized subsets of the type space, with support for union, intersection, and negation
         struct CanonicalTypeSet {
                                                                                             // union types are not counted for the purpose of this data structure, hence the minus one
             const static U8 numDerivedTypes = numDerivedTypeClasses - 1;
@@ -116,14 +132,20 @@ namespace jitbox {
             Type derivedTypes[numDerivedTypes];
 
             Bool primitiveTypes[numPrimitiveTypes];
-
-            Set<Type> structureTypes;
-
-            Bool signatureTypesNegated = false;
+                                                                                            // if more than one tuple type is added to the set, this object is used to store the set of tuples and handle set operations
+            TupleSet tupleTypes;
 
             CanonicalTypeSet();
 
             CanonicalTypeSet(const CanonicalTypeSet&);
+
+            void operator = (const CanonicalTypeSet&);
+                                                                                            // makes this object an empty set
+            void emptySet();
+                                                                                            // makes this object the set of all possible types
+            void entireUniverse();
+
+            void copy(const CanonicalTypeSet&);
                                                                                             // allows usage in ordered maps
             Bool operator < (const CanonicalTypeSet&);
 
@@ -136,6 +158,8 @@ namespace jitbox {
             void intersect(const CanonicalTypeSet&);
 
             void negate();
+                                                                                            // converts this object to a Type; tries to simplify it and avoid expressing it as a set if possible
+            Type convertToType();
 
         };
         
@@ -144,8 +168,6 @@ namespace jitbox {
     struct Type : public Printable {	
                                                                                             // ordered list of types; repeats allowed
         using List = Vec<Type>;
-                                                                                            // unordered set of types; repeats not counted
-        using Set = Set<Type>;
 
         enum : ID {
                                                                                             // used for void functions
@@ -157,9 +179,9 @@ namespace jitbox {
                                                                                             // concrete primitive type
             I8, I16, I32, I64, U8, U16, U32, U64, F32, F64,                                 
                                                                                             // abstract derived types
-            POINTER, ARRAY, STRUCTURE, FUNCTION,
-                                                                                            // abstract type representing a union of multiple types
-            UNION
+            TUPLE, POINTER, ARRAY, FUNCTION,
+                                                                                            // abstract representation of a subset of the type space
+            SET
 
         };
                                                                                             // default constructor; contains type::nothing
@@ -175,7 +197,7 @@ namespace jitbox {
                                                                                             // assigns an id to an array type based on the type that the array contains
         static Type Array(Type);
                                                                                             // assigns an id to a function type
-        static Type Function(const FunctionSignature&); 
+        static Type Function(const Signature&); 
                                                                                             // assigns an id to a function type; throws an exception if arguments is not a tuple type      
         static Type Function(Type arguments, Type returnType); 
                                                                                             // assigns an id to a function type        
@@ -192,16 +214,14 @@ namespace jitbox {
         Type pointsTo() const;
                                                                                             // returns the type that the array contains; throws an exception if not an array type
         Type contains() const;
-                                                                                            // returns the structure signature for this type; throws an exception if not a structure type
-        const StructureSignature& getStructureSignature() const;
-                                                                                            // returns the function signature for this type; throws an exception if not a function type
-        const FunctionSignature& getFunctionSignature() const;
+                                                                                            // returns the signature for this type; throws an exception if not a function type
+        const Signature& getSignature() const;
 
-        Type Or(Type);
+        Type Or(Type) const;
 
-        Type And(Type);
+        Type And(Type) const;
 
-        Type Not();
+        Type Not() const;
                                                                                             // semantic type comparison, evaluates subset relationship between two subsets of the type space
         Bool is(Type) const;
 
@@ -223,15 +243,21 @@ namespace jitbox {
 
     protected:
 
+        static Type Set(Type);
+
+        static Type Set(const _internal::CanonicalTypeSet&);
+
+        const _internal::CanonicalTypeSet& getInternalSet() const;
+
         ID identifier = NOTHING;
         ID typeClass = NOTHING;
-
                                                                                             // assigns an id to a structure type
-        static Type Structure(const StructureSignature&);
-
         void determineClass();
 
         String toString(jitbox::U8) const override;
+
+        friend struct _internal::TupleSet;
+        friend struct _internal::CanonicalTypeSet;
 
     };
 
@@ -248,7 +274,8 @@ namespace jitbox {
     namespace _internal {
 
         const U8 firstPrimitive = Type::I8;
-        const U8 firstDerivedTypeClass = Type::POINTER;
+
+        const U8 firstDerivedTypeClass = Type::TUPLE;
 
     }
 
@@ -280,45 +307,19 @@ namespace jitbox {
         String toString(U8) const override;
 
     };
-
+                                                                                            // function signature
     struct Signature : public Printable {
+                                                                                            // this member is always a tuple type
+        Type argumentTypes;
+        Type returnType;
+                                                                                            // argument types must be a tuple type
+        Signature(Type argumentTypes, Type returnType);
+                                                                                            
+        Signature(const Type::List& argumentTypes, Type returnType);
 
         Bool operator < (const Signature&) const;
 
         String toString(U8) const override;
-
-    protected:
-
-        Signature(Type, Type, bool);
-
-        Type t1, t2;
-        bool isFunction;
-
-    };
-
-    struct StructureSignature : public Signature {
-
-        const Type::Set& getParents() const;
-
-        Type getParentsType() const;
-
-        const Type::List& getMembers() const;
-
-        Type getMembersType() const;
-
-    };
-
-    struct FunctionSignature : public Signature {
-                                                                                            // arguments should be a tuple type, and returnType can be any type
-        FunctionSignature(Type arguments, Type returnType);
-
-        FunctionSignature(Type::List& arguments, Type returnType);
-
-        const Type::List& getArguments() const;
-
-        Type getArgumentsType() const;
-
-        Type getReturnType() const;
 
     };
 

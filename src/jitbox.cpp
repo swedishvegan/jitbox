@@ -72,27 +72,136 @@ Map<K, V> kvMap_##TheType; \
 Map<V, K> vkMap_##TheType; \
 ID nextFreeID_##TheType = Type::TheType + jbi::numDerivedTypeClasses
 
+implementMaps(TUPLE, Type::List, ID);
 implementMaps(POINTER, ID, ID);
 implementMaps(ARRAY, ID, ID);
-implementMaps(STRUCTURE, Signature, ID);
 implementMaps(FUNCTION, Signature, ID);
-implementMaps(UNION, jbi::CanonicalTypeSet, ID);
+implementMaps(SET, jbi::CanonicalTypeSet, ID);
 
-jbi::CanonicalTypeSet::CanonicalTypeSet() { 
-    
-    for (U8 i = 0; i < numDerivedTypes; i++) derivedTypes[i] = Type::NOTHING;
-    std::memset(primitiveTypes, false, sizeof(bool) * numPrimitiveTypes);
+void jbi::TupleSet::merge(Type t) {
+
+    if (t.getClass() == Type::SET) {
+
+        merge(getKeyFromValue(vkMap_SET, t.getID())->tupleTypes);
+        return;
+
+    }
+
+    insertElement(t);
 
 }
 
-jbi::CanonicalTypeSet::CanonicalTypeSet(const CanonicalTypeSet& cts) { 
+void jbi::TupleSet::merge(const TupleSet& ts) { for (auto t : ts.elements) insertElement(t); }
+
+void jbi::TupleSet::intersect(Type t) {
+
+    if (t.getClass() == Type::SET) {
+
+        intersect(getKeyFromValue(vkMap_SET, t.getID())->tupleTypes);
+        return;
+
+    }
+
+    TupleSet newSet;
+    for (auto el : elements) newSet.insertElement(t.And(el));
+
+    elements.swap(newSet.elements);
+
+}
+
+void jbi::TupleSet::intersect(const TupleSet& ts) { for (auto el1 : elements) for (auto el2 : ts.elements) insertElement(el1.And(el2)); }
+
+void jbi::TupleSet::negate() {
+
+    static Type::List newTuple;
+
+    TupleSet singularNegation;
+    TupleSet totalNegation;
+
+    for (auto el : elements) {
+
+        singularNegation.elements.clear();
+
+        const auto& tuple = *getKeyFromValue(vkMap_TUPLE, el.getID());
+        auto tupleSize = tuple.size();
+
+        newTuple.resize(tupleSize);
+        for (auto i = tupleSize * 0; i < tupleSize; i++) newTuple[i] = Type::ANYTHING;
+        
+        for (auto i = tupleSize * 0; i < tupleSize; i++) {
+
+            if (i > 0) newTuple[i - 1] = Type::ANYTHING;
+
+            auto negation = tuple[i].Not();
+            if (negation.is(Type::NOTHING)) continue;
+
+            newTuple[i] = negation;
+            singularNegation.insertElement(Type::Tuple(newTuple));
+
+        }
+
+        if (totalNegation.elements.size() == 0) totalNegation.elements.swap(singularNegation.elements);
+        else totalNegation.intersect(singularNegation);
+
+    }
+
+    totalNegation.elements.swap(elements);
+
+}
+
+void jbi::TupleSet::insertElement(Type t) {
+
+#ifndef JITBOX_SIMPLIFY_TUPLE_REPRESENTATION
+
+    elements.insert(t);
+
+#else
+
+    static Type::List removeBuffer;
+    removeBuffer.clear();
+
+    for (auto el : elements) {
+
+        if (t.is(el)) return;
+        else if (el.is(t)) removeBuffer.push_back(el);
+
+    }
+
+    elements.insert(t);
+    for (auto rm : removeBuffer) elements.erase(rm);
+
+#endif
+
+}
+
+jbi::CanonicalTypeSet::CanonicalTypeSet() { emptySet(); }
+
+jbi::CanonicalTypeSet::CanonicalTypeSet(const CanonicalTypeSet& cts) { copy(cts); }
+
+void jbi::CanonicalTypeSet::operator = (const CanonicalTypeSet& cts) { copy(cts); }
+
+void jbi::CanonicalTypeSet::emptySet() {
+
+    for (U8 i = 0; i < numDerivedTypes; i++) derivedTypes[i] = Type::NOTHING;
+    std::memset(primitiveTypes, false, sizeof(Bool) * numPrimitiveTypes);
+
+}
+
+void jbi::CanonicalTypeSet::entireUniverse() {
+
+    for (U8 i = 0; i < numDerivedTypes; i++) derivedTypes[i] = Type::ANYTHING;
+    std::memset(primitiveTypes, true, sizeof(Bool) * numPrimitiveTypes);
+
+}
+
+void jbi::CanonicalTypeSet::copy(const CanonicalTypeSet& cts) { 
     
     std::memcpy(derivedTypes, cts.derivedTypes, sizeof(Type) * numDerivedTypes);
-    std::memcpy(primitiveTypes, cts.primitiveTypes, sizeof(bool) * numPrimitiveTypes);
+    std::memcpy(primitiveTypes, cts.primitiveTypes, sizeof(Bool) * numPrimitiveTypes);
 
 }
 
-bool jbi::CanonicalTypeSet::operator < (const CanonicalTypeSet& cts) {
+Bool jbi::CanonicalTypeSet::operator < (const CanonicalTypeSet& cts) {
 
     for (U8 i = 0; i < numDerivedTypes; i++) {
 
@@ -114,11 +223,24 @@ bool jbi::CanonicalTypeSet::operator < (const CanonicalTypeSet& cts) {
 
 void jbi::CanonicalTypeSet::merge(Type t) {
 
+    auto tID = t.getID();
+
+    if (tID == Type::NOTHING) return;
+
+    if (tID == Type::ANYTHING) { entireUniverse(); return; }
+
     auto tClass = t.getClass();
 
-    if (tClass == Type::UNION) { merge(*getKeyFromValue(vkMap_UNION, t.getID())); return; }
+    if (tClass == Type::SET) { merge(*getKeyFromValue(vkMap_SET, t.getID())); return; }
 
-    if (tClass == Type::PRIMITIVE) { primitiveTypes[t.getID() - firstPrimitive] = true; return; }
+    if (tClass == Type::PRIMITIVE) {
+        
+        if (tID == Type::PRIMITIVE) std::memset(primitiveTypes, true, sizeof(Bool) * numPrimitiveTypes);
+        else primitiveTypes[t.getID() - firstPrimitive] = true;
+        
+        return;
+    
+    }
 
     auto matchingClass = tClass - firstDerivedTypeClass;
 
@@ -135,14 +257,23 @@ void jbi::CanonicalTypeSet::merge(const CanonicalTypeSet& cts) {
 
 void jbi::CanonicalTypeSet::intersect(Type t) {
 
+    auto tID = t.getID();
+
+    if (tID == Type::NOTHING) { emptySet(); return; }
+
+    if (tID == Type::ANYTHING) return;
+
     auto tClass = t.getClass();
 
-    if (tClass == Type::UNION) { intersect(*getKeyFromValue(vkMap_UNION, t.getID())); return; }
+    if (tClass == Type::SET) { intersect(*getKeyFromValue(vkMap_SET, t.getID())); return; }
 
     if (tClass == Type::PRIMITIVE) { 
         
-        std::memset(primitiveTypes, false, sizeof(bool) * numPrimitiveTypes); 
-        primitiveTypes[t.getID() - firstPrimitive] = true; 
+        if (tID != Type::PRIMITIVE) for (U8 i = 0; i < numPrimitiveTypes; i++) primitiveTypes[i] = 
+            (i == t.getID() - firstPrimitive)
+                ? primitiveTypes[i]
+                : false
+            ;
         
         return;
         
@@ -163,9 +294,7 @@ void jbi::CanonicalTypeSet::intersect(const CanonicalTypeSet& cts) {
 
 void jbi::CanonicalTypeSet::negate() {
 
-    CanonicalTypeSet ctsNew;
-
-    for (U8 i = 0; i < numDerivedTypes; i++) ctsNew.derivedTypes[i] = 
+    for (U8 i = 0; i < numDerivedTypes; i++) derivedTypes[i] = 
         (derivedTypes[i] == Type::NOTHING) 
             ? firstDerivedTypeClass + i 
             : derivedTypes[i].Not()
@@ -175,9 +304,63 @@ void jbi::CanonicalTypeSet::negate() {
     
 }
 
+Type jbi::CanonicalTypeSet::convertToType() {
+
+    ID tID = Type::NOTHING;
+
+    Bool couldBeAnything = true;
+    Bool couldBeAbstractPrimitive = true;
+    I32 numOptions = 0;
+
+    for (U8 i = 0; i < numPrimitiveTypes; i++) {
+
+        if (primitiveTypes[i]) {
+
+            tID = firstPrimitive + i;
+            numOptions++;
+
+        }
+
+        else {
+
+            couldBeAnything = false;
+            couldBeAbstractPrimitive = false;
+
+        }
+
+    }
+
+    for (U8 i = 0; i < numDerivedTypes; i++) {
+
+        auto curID = derivedTypes[i].getID();
+
+        if (curID == Type::NOTHING) couldBeAnything = false;
+
+        else {
+
+            tID = firstDerivedTypeClass + i;
+
+            couldBeAbstractPrimitive = false;
+            numOptions++;
+
+            if (curID != tID) couldBeAnything = false;
+
+        }
+
+    }
+
+    if (couldBeAnything) return Type::ANYTHING;
+    if (couldBeAbstractPrimitive) return Type::PRIMITIVE;
+    if (numOptions == 0) return Type::NOTHING;
+    if (numOptions == 1) return tID;
+
+    return Type::Set(*this);
+
+}
+
 Type::Type() { }
 
-#define validateTypeID(TheType, KeyType) \
+#define validateTypeID(TheType) \
 \
 case Type::TheType: \
     \
@@ -192,11 +375,11 @@ Type::Type(ID identifier) : identifier(identifier) {
     
     switch (typeClass) {
 
-        validateTypeID(POINTER, ID);
-        validateTypeID(ARRAY, ID);
-        validateTypeID(STRUCTURE, Signature);
-        validateTypeID(FUNCTION, Signature);
-        validateTypeID(UNION, jbi::CanonicalTypeSet);
+        validateTypeID(TUPLE);
+        validateTypeID(POINTER);
+        validateTypeID(ARRAY);
+        validateTypeID(FUNCTION);
+        validateTypeID(SET);
 
     }
 
@@ -204,69 +387,55 @@ Type::Type(ID identifier) : identifier(identifier) {
 
 }
 
-Bool jitbox::operator == (const Type& lh, ID rh) { return lh.getID() == rh; }
-
-Bool jitbox::operator == (const Type& lh, const Type& rh) { return lh.getID() == rh.getID(); }
-
-Bool jitbox::operator == (ID lh, const Type& rh) { return lh == rh.getID(); }
-
-Bool jitbox::operator != (const Type& lh, ID rh) { return lh.getID() != rh; }
-
-Bool jitbox::operator != (const Type& lh, const Type& rh) { return lh.getID() != rh.getID(); }
-
-Bool jitbox::operator != (ID lh, const Type& rh) { return lh != rh.getID(); }
-
-Bool jitbox::operator < (const Type& lh, const Type& rh) { return lh.getID() < rh.getID(); }
+Type Type::Tuple(const List& tl) { return Type(getValueFromKey(kvMap_TUPLE, vkMap_TUPLE, nextFreeID_TUPLE, tl)); }
 
 Type Type::Pointer(Type t) { return Type(getValueFromKey(kvMap_POINTER, vkMap_POINTER, nextFreeID_POINTER, t.getID())); }
 
 Type Type::Array(Type t) { return Type(getValueFromKey(kvMap_ARRAY, vkMap_ARRAY, nextFreeID_ARRAY, t.getID())); }
 
-Type Type::Structure(const Signature& s) { return Type(getValueFromKey(kvMap_STRUCTURE, vkMap_STRUCTURE, nextFreeID_STRUCTURE, s)); }
-
 Type Type::Function(const Signature& s) { return Type(getValueFromKey(kvMap_FUNCTION, vkMap_FUNCTION, nextFreeID_FUNCTION, s)); }
 
-Type Type::Any(const Type::List& tl) {
+Type Type::Function(Type arguments, Type returnType) {
 
-    bool multipleClasses = false;
-    ID lastClass = -1;
-
-    for (auto t : tl) {
-
-        auto tid = t.getID();
-
-        if (tid == ANYTHING) return ANYTHING;
-
-        if (lastClass < 0) lastClass = tid;
-        else if (lastClass != tid) multipleClasses = true;
-
-    }
-
-    if (!multipleClasses) {
-
-        switch (lastClass) {
-
-            case NOTHING: return NOTHING;
-            
-            case UNION: {
-
-                Type::Set s;
-
-                TODO: Add exception for max recursion depth exceeded
-                TODO: Signature comparison is only based on ID
-                TODO: Don't even expose signature constructor to the user
-                TODO: Make everyting const that can be made const
-            }
-
-        }
-
-    }
+    Signature s(arguments, returnType);
+    return Function(s);
 
 }
 
-#define makeTypeGetter(TheType, getter, KeyType, rettype) \
-\
-rettype Type::getter() const { return *getKeyFromValue(vkMap_##TheType, identifier); }
+Type Type::Function(const List& arguments, Type returnType) {
+
+    Signature s(arguments, returnType);
+    return Function(s);
+
+}
+
+Type Type::Any(const Type::List& tl) {
+
+    
+
+}
+
+Type Type::Or(Type t1, Type t2) { return t1.Or(t2); }
+
+Type Type::All(const Type::List& tl) {
+
+
+
+}
+
+Type Type::And(Type t1, Type t2) { return t1.And(t2); }
+
+Type Type::Not(Type t) { return t.Not(); }
+
+const Type::List& Type::members() const {
+
+#ifdef JITBOX_DEBUG
+    if (typeClass != TUPLE) throw Error(Error::TYPE_GETTER_MISMATCH);
+#endif
+
+    return *getKeyFromValue(vkMap_TUPLE, identifier);
+
+}
 
 Type Type::pointsTo() const {
 
@@ -291,126 +460,68 @@ Type Type::contains() const {
 const Signature& Type::getSignature() const {
 
 #ifdef JITBOX_DEBUG
-    if (typeClass != FUNCTION && typeClass != STRUCTURE) throw Error(Error::TYPE_GETTER_MISMATCH);
+    if (typeClass != FUNCTION) throw Error(Error::TYPE_GETTER_MISMATCH);
 #endif
 
-    return *getKeyFromValue((typeClass == FUNCTION) ? vkMap_FUNCTION : vkMap_STRUCTURE, identifier);
+    return *getKeyFromValue(vkMap_FUNCTION, identifier);
 
 }
 
-const Type::List& Type::getList() const {
 
-#ifdef JITBOX_DEBUG
-    if (typeClass != ANY && typeClass != ALL) throw Error(Error::TYPE_GETTER_MISMATCH);
-#endif
 
-    return *getKeyFromValue((typeClass == ANY) ? vkMap_ANY : vkMap_ALL, identifier);
+Type Type::Or(Type t) {
+
+    if (identifier == ANYTHING || t.identifier == ANYTHING) return ANYTHING;
+    if (identifier == NOTHING) return t;
+    if (t.identifier == NOTHING) return *this;
+
+    Type* setType = nullptr;
+    if (typeClass == SET) setType = this;
+    else if (t.typeClass == SET) setType = &t;
+
+    if (setType) {
+
+        auto set = setType->getInternalSet();
+        set.merge(t);
+
+        return Set(set);
+
+    }
+
+    if (typeClass == t.typeClass) {
+
+        switch (typeClass) {
+        case TUPLE:
+        {
+
+            const auto& lh = getKeyFromValue(vkMap_TUPLE, identifier);
+            const auto& rh = 
+
+        }
+
+        }
+
+    }
+
+}
+
+Type Type::And(Type t) {
+
+
+
+}
+
+Type Type::Not() {
+
+
 
 }
 
 Bool Type::is(Type t) const {
-    std::cout << "Checking whether\n" << print(1) << "is" << t.print(1) << "\n";
-    if (t.identifier == ANYTHING) return true;
-    if (t.identifier == NOTHING) return false;
-    if (identifier == t.identifier) return true;
+    
 
-    if (t.typeClass == NOT) {
-
-        if (t.identifier == NOT) return typeClass == NOT;
-
-        return !(this->is(Not(t)));
-
-    }
-
-    if (typeClass == NOT) {
-
-        if (identifier == NOT) return false;
-
-        return !(Not(*this).is(t));
-        // Not(PRIMITIVE).is(ARRAY) = ! (PRIMITIVE.is(ARRAY)) = ! false = true
-        
-    }
-
-    if (t.typeClass == ANY) {
-
-        if (t.identifier == ANY) return typeClass == ANY;
-
-        const auto& tl = t.getList();
-
-        for (auto ty : tl) if (this->is(ty)) return true;
-        return false;
-
-    }
-
-    if (typeClass == ANY) {
-
-        if (identifier == ANY) return false;
-
-        const auto& tl = getList();
-
-        for (auto ty : tl) if (ty.is(t)) return true;
-        return false;
-
-    }
-
-    if (t.typeClass == ALL) {
-
-        if (t.identifier == ALL) return typeClass == ALL;
-
-        const auto& tl = t.getList();
-
-        for (auto ty : tl) if (!this->is(ty)) return false;
-        return true;
-
-    }
-
-    if (typeClass == ALL) {
-
-        if (identifier == ALL) return false;
-
-        const auto& tl = getList();
-
-        for (auto ty : tl) if (!ty.is(t)) return false;
-        return true;
-
-    }
-
-    if (typeClass != t.typeClass) return false;
-
-    if (typeClass == PRIMITIVE && t.identifier == PRIMITIVE) return true;
-
-    if (typeClass == POINTER) {
-
-        if (t.identifier == POINTER) return true;
-        return Type(pointsTo()).is(t.pointsTo());
-
-    }
-
-    if (typeClass == ARRAY) {
-
-        if (t.identifier == ARRAY) return true;
-        return Type(contains()).is(t.contains());
-
-    }
-
-    if (typeClass == STRUCTURE || typeClass == FUNCTION) {
-
-        if (t.identifier == STRUCTURE || t.identifier == FUNCTION) return true;
-
-        const Signature *lh, *rh;
-
-        if (typeClass == STRUCTURE) { lh = &getSignature(); rh = &t.getSignature(); }
-        else { lh = &getSignature(); rh = &t.getSignature(); }
-
-        return lh->identifier == rh->identifier;
-
-    }
-
-    return false;
 
 }
-
-Bool Type::is(ID i) const { return is(Type(i)); }
 
 ID Type::getID() const { return identifier; }
 
@@ -418,39 +529,7 @@ ID Type::getClass() const { return typeClass; }
 
 Bool Type::isConcrete() const {
 
-    if (identifier == NOTHING) return true;
-    if (identifier == ANYTHING) return false;
-    if (typeClass == PRIMITIVE) return identifier != PRIMITIVE;
-    if (typeClass == ANY) return false;
-
-    if (typeClass == POINTER) {
-
-        if (identifier == POINTER) return false;
-        return Type(pointsTo()).isConcrete();
-
-    }
-
-    if (typeClass == ARRAY) {
-
-        if (identifier == ARRAY) return false;
-        return Type(contains()).isConcrete();
-
-    }
-
-    if (typeClass == STRUCTURE || typeClass == FUNCTION) {
-
-        if (identifier == typeClass) return false;
-
-        auto& sig = (typeClass == STRUCTURE) ? getSignature() : getSignature();
-
-        for (jitbox::I32 k = 0; k < sig.argTypes.size(); k++)
-            if (!sig.argTypes[k].isConcrete()) return false;
-
-        return true;
-
-    }
-
-    return false;
+    
 
 }
 
@@ -494,16 +573,29 @@ I32 Type::numBytes() const {
 
 }
 
+Type Type::Set(Type t) {
+
+    jbi::CanonicalTypeSet cts;
+    cts.merge(t);
+
+    return Set(cts);
+
+}
+
+Type Type::Set(const jbi::CanonicalTypeSet& cts) { return Type(getValueFromKey(kvMap_SET, vkMap_SET, nextFreeID_SET, cts)); }
+
+const jbi::CanonicalTypeSet& Type::getInternalSet() const { return *getKeyFromValue(vkMap_SET, identifier); }
+
 void Type::determineClass() {
 
     if (identifier == NOTHING) typeClass = NOTHING;
     else if (identifier == ANYTHING) typeClass = ANYTHING;
     else if (identifier >= PRIMITIVE && identifier < POINTER) typeClass = PRIMITIVE;
-    else if ((identifier - POINTER) % incrementID == 0) typeClass = POINTER;
-    else if ((identifier - ARRAY) % incrementID == 0) typeClass = ARRAY;
-    else if ((identifier - STRUCTURE) % incrementID == 0) typeClass = STRUCTURE;
-    else if ((identifier - FUNCTION) % incrementID == 0) typeClass = FUNCTION;
-    else if ((identifier - ANY) % incrementID == 0) typeClass = ANY;
+    else if ((identifier - TUPLE) % jbi::numDerivedTypeClasses == 0) typeClass = TUPLE;
+    else if ((identifier - POINTER) % jbi::numDerivedTypeClasses == 0) typeClass = POINTER;
+    else if ((identifier - ARRAY) % jbi::numDerivedTypeClasses == 0) typeClass = ARRAY;
+    else if ((identifier - FUNCTION) % jbi::numDerivedTypeClasses == 0) typeClass = FUNCTION;
+    else if ((identifier - SET) % jbi::numDerivedTypeClasses == 0) typeClass = SET;
 
 }
 
@@ -541,6 +633,20 @@ String Type::toString(jitbox::U8 alignment) const {
     return "unknown type";
     
 }
+
+Bool jitbox::operator == (const Type& lh, ID rh) { return lh.getID() == rh; }
+
+Bool jitbox::operator == (const Type& lh, const Type& rh) { return lh.getID() == rh.getID(); }
+
+Bool jitbox::operator == (ID lh, const Type& rh) { return lh == rh.getID(); }
+
+Bool jitbox::operator != (const Type& lh, ID rh) { return lh.getID() != rh; }
+
+Bool jitbox::operator != (const Type& lh, const Type& rh) { return lh.getID() != rh.getID(); }
+
+Bool jitbox::operator != (ID lh, const Type& rh) { return lh != rh.getID(); }
+
+Bool jitbox::operator < (const Type& lh, const Type& rh) { return lh.getID() < rh.getID(); }
 
 Bool Constant::operator == (const Constant& ctc) {
 

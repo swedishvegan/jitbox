@@ -87,7 +87,9 @@ namespace jitbox {
                                                                                             // the same instruction was used as the RH in two different assignments
             INVALID_ASSIGNMENT,
                                                                                             // a jitbox object from a different context was used
-            CONTEXT_MISMATCH
+            CONTEXT_MISMATCH,
+                                                                                            // the argument type passed to a signature constructor was not a tuple
+            INVALID_SIGNATURE_ARGUMENT,
 
         };
         
@@ -109,31 +111,39 @@ namespace jitbox {
                                                                                             // subset of the tuple type space, with support for union, intersection, and negation
         struct TupleSet {
 
-            Set<Type> elements;
-                                                                                            // argument must be a tuple type
-            void merge(Type);
+            Set<Vec<Type>> elements;
                                         
             void merge(const TupleSet&);
-                                                                                            // argument must be a tuple type
-            void intersect(Type);
 
             void intersect(const TupleSet&);
 
             void negate();
                                                                                             // if JITBOX_SIMPLIFY_TUPLE_REPRESENTATION is defined then this function will try to eliminate redundant elements
-            void insertElement(Type);
+            void insertElement(const Vec<Type>&, Bool skipNothingnessCheck = false);
+
+            Bool is(const TupleSet&);
+
+            Bool isEmptySet();
+
+            Bool isEntireTupleUniverse();
+
+            static void intersectTuples(const Vec<Type>&, const Vec<Type>&, Vec<Type>&);
+
+            static Bool tupleIs(const Vec<Type>&, const Vec<Type>&);
+
+            static Type getTupleElement(const Vec<Type>&, U32);
 
         };
+                                                                                            // needed for ordered maps
+        Bool operator < (const TupleSet&, const TupleSet&);
                                                                                             // used internally to represent generalized subsets of the type space, with support for union, intersection, and negation
         struct CanonicalTypeSet {
-                                                                                            // union types are not counted for the purpose of this data structure, hence the minus one
+                                                                                            // set types are not counted for the purpose of this data structure, hence the minus one
             const static U8 numDerivedTypes = numDerivedTypeClasses - 1;
 
             Type derivedTypes[numDerivedTypes];
 
             Bool primitiveTypes[numPrimitiveTypes];
-                                                                                            // if more than one tuple type is added to the set, this object is used to store the set of tuples and handle set operations
-            TupleSet tupleTypes;
 
             CanonicalTypeSet();
 
@@ -146,8 +156,6 @@ namespace jitbox {
             void entireUniverse();
 
             void copy(const CanonicalTypeSet&);
-                                                                                            // allows usage in ordered maps
-            Bool operator < (const CanonicalTypeSet&);
 
             void merge(Type);
 
@@ -162,6 +170,8 @@ namespace jitbox {
             Type convertToType();
 
         };
+                                                                                            // needed for ordered maps
+        Bool operator < (const CanonicalTypeSet&, const CanonicalTypeSet&);
         
     }
                                                                                             // creates a 1-1 mapping between integer ids and subsets of the type space
@@ -202,14 +212,14 @@ namespace jitbox {
         static Type Function(Type arguments, Type returnType); 
                                                                                             // assigns an id to a function type        
         static Type Function(const List& arguments, Type returnType);
-                                                                                            // assigns an id to a union type based on the given typelist
+                                                                                            // assigns an id to the union of the types in the given typelist
         static Type Any(const List&); static Type Or(Type, Type);
-                                                                                            // assigns an id to an intersection type based on the given typelist
+                                                                                            // assigns an id to the intersection of the types in the given typelist
         static Type All(const List&); static Type And(Type, Type);
-                                                                                            // assigns an id to a negation type based on the given type
+                                                                                            // assigns an id to the negation of the given type
         static Type Not(Type);
-                                                                                            // returns a list of the members of this type; throws an exception if not a tuple type
-        const List& members() const;
+                                                                                            // returns a representation of all possible types that the tuple element corresponding to the specified index could be; throws an exception if not a tuple type
+        Type getTupleElement(jitbox::U32) const;
                                                                                             // returns the type that is being pointed to; throws an exception if not a pointer type
         Type pointsTo() const;
                                                                                             // returns the type that the array contains; throws an exception if not an array type
@@ -260,15 +270,7 @@ namespace jitbox {
         friend struct _internal::CanonicalTypeSet;
 
     };
-
-    Bool operator == (const Type&, ID);
-    Bool operator == (const Type&, const Type&);
-    Bool operator == (ID, const Type&);
-
-    Bool operator != (const Type&, ID);
-    Bool operator != (const Type&, const Type&);
-    Bool operator != (ID, const Type&);
-                                                                                            // needed in order to use an ordered map
+                                                                                            // needed for ordered maps
     Bool operator < (const Type&, const Type&);
 
     namespace _internal {
@@ -317,11 +319,11 @@ namespace jitbox {
                                                                                             
         Signature(const Type::List& argumentTypes, Type returnType);
 
-        Bool operator < (const Signature&) const;
-
         String toString(U8) const override;
 
     };
+
+    Bool operator < (const Signature&, const Signature&);
 
     struct VarRef;
     struct Function;

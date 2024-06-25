@@ -72,76 +72,68 @@ Map<K, V> kvMap_##TheType; \
 Map<V, K> vkMap_##TheType; \
 ID nextFreeID_##TheType = Type::TheType + jbi::numDerivedTypeClasses
 
-implementMaps(TUPLE, Type::List, ID);
+implementMaps(TUPLE, jbi::TupleSet, ID);
 implementMaps(POINTER, ID, ID);
 implementMaps(ARRAY, ID, ID);
 implementMaps(FUNCTION, Signature, ID);
 implementMaps(SET, jbi::CanonicalTypeSet, ID);
 
-void jbi::TupleSet::merge(Type t) {
+void jbi::TupleSet::merge(const TupleSet& ts) { for (const auto& t : ts.elements) insertElement(t); }
 
-    if (t.getClass() == Type::SET) {
-
-        merge(getKeyFromValue(vkMap_SET, t.getID())->tupleTypes);
-        return;
-
-    }
-
-    insertElement(t);
-
-}
-
-void jbi::TupleSet::merge(const TupleSet& ts) { for (auto t : ts.elements) insertElement(t); }
-
-void jbi::TupleSet::intersect(Type t) {
-
-    if (t.getClass() == Type::SET) {
-
-        intersect(getKeyFromValue(vkMap_SET, t.getID())->tupleTypes);
-        return;
-
-    }
+void jbi::TupleSet::intersect(const TupleSet& ts) {
 
     TupleSet newSet;
-    for (auto el : elements) newSet.insertElement(t.And(el));
+    Type::List newTuple;
+    
+    for (const auto& el1 : elements) for (const auto& el2 : ts.elements) {
+        
+        intersectTuples(el1, el2, newTuple);
+        newSet.insertElement(newTuple);
+
+    }
 
     elements.swap(newSet.elements);
-
+    
 }
-
-void jbi::TupleSet::intersect(const TupleSet& ts) { for (auto el1 : elements) for (auto el2 : ts.elements) insertElement(el1.And(el2)); }
 
 void jbi::TupleSet::negate() {
 
-    static Type::List newTuple;
+    Type::List newTuple;
 
     TupleSet singularNegation;
     TupleSet totalNegation;
 
-    for (auto el : elements) {
+    for (const auto& el : elements) {
 
         singularNegation.elements.clear();
 
-        const auto& tuple = *getKeyFromValue(vkMap_TUPLE, el.getID());
-        auto tupleSize = tuple.size();
-
+        auto tupleSize = el.size();
         newTuple.resize(tupleSize);
+
         for (auto i = tupleSize * 0; i < tupleSize; i++) newTuple[i] = Type::ANYTHING;
         
         for (auto i = tupleSize * 0; i < tupleSize; i++) {
 
             if (i > 0) newTuple[i - 1] = Type::ANYTHING;
 
-            auto negation = tuple[i].Not();
+            auto negation = el[i].Not();
             if (negation.is(Type::NOTHING)) continue;
 
             newTuple[i] = negation;
-            singularNegation.insertElement(Type::Tuple(newTuple));
+            singularNegation.insertElement(newTuple, true);
 
         }
 
+        if (singularNegation.isEmptySet()) { elements.clear(); return; }
+
         if (totalNegation.elements.size() == 0) totalNegation.elements.swap(singularNegation.elements);
-        else totalNegation.intersect(singularNegation);
+
+        else {
+
+            totalNegation.intersect(singularNegation);
+            if (totalNegation.isEmptySet()) { elements.clear(); return; }
+
+        }
 
     }
 
@@ -149,30 +141,79 @@ void jbi::TupleSet::negate() {
 
 }
 
-void jbi::TupleSet::insertElement(Type t) {
+void jbi::TupleSet::insertElement(const Type::List& tl, Bool skipNothingnessCheck) {
+
+    if (!skipNothingnessCheck) for (auto i = tl.size() * 0; i < tl.size(); i++) if (tl[i].is(Type::NOTHING)) return;
 
 #ifndef JITBOX_SIMPLIFY_TUPLE_REPRESENTATION
 
-    elements.insert(t);
+    elements.insert(tl);
 
 #else
 
-    static Type::List removeBuffer;
+    static Vec<Type::List*> removeBuffer;
     removeBuffer.clear();
 
     for (auto el : elements) {
 
-        if (t.is(el)) return;
-        else if (el.is(t)) removeBuffer.push_back(el);
+        if (tupleIs(tl, el)) return;
+        else if (tupleIs(el, tl)) removeBuffer.push_back(&el);
 
     }
 
-    elements.insert(t);
-    for (auto rm : removeBuffer) elements.erase(rm);
+    elements.insert(tl);
+    for (auto rm : removeBuffer) elements.erase(*rm);
 
 #endif
 
 }
+
+Bool jbi::TupleSet::is(const TupleSet& ts) {
+
+    TupleSet lh = *this;
+    TupleSet rh = ts;
+
+    rh.negate();
+    lh.intersect(rh);
+
+    return lh.isEmptySet();
+
+}
+
+Bool jbi::TupleSet::isEmptySet() { return elements.size() == 0; }
+
+Bool jbi::TupleSet::isEntireTupleUniverse() {
+
+    TupleSet ts = *this;
+    
+    ts.negate();
+    return ts.isEmptySet();
+
+}
+
+void jbi::TupleSet::intersectTuples(const Type::List& lh, const Type::List& rh, Type::List& result) {
+
+    auto lsz = lh.size(); auto rsz = rh.size();
+    auto newsz = lsz > rsz ? lsz : rsz;
+
+    result.resize(newsz);
+    for (auto i = newsz * 0; i < newsz; i++) result[i] = getTupleElement(lh, i).And(getTupleElement(rh, i));
+
+}
+
+Bool jbi::TupleSet::tupleIs(const Type::List& lh, const Type::List& rh) {
+
+    auto lsz = lh.size(); auto rsz = rh.size();
+    auto maxsz = lsz > rsz ? lsz : rsz;
+
+    for (auto i = maxsz * 0; i < maxsz; i++) if (!getTupleElement(lh, i).is(getTupleElement(rh, i))) return false;
+    return true;
+
+}
+
+Type jbi::TupleSet::getTupleElement(const Type::List& lh, U32 idx) { return (idx < lh.size()) ? lh[idx] : Type::ANYTHING; }
+
+Bool jbi::operator < (const TupleSet& lh, const TupleSet& rh) { return lh.elements < rh.elements; }
 
 jbi::CanonicalTypeSet::CanonicalTypeSet() { emptySet(); }
 
@@ -198,26 +239,6 @@ void jbi::CanonicalTypeSet::copy(const CanonicalTypeSet& cts) {
     
     std::memcpy(derivedTypes, cts.derivedTypes, sizeof(Type) * numDerivedTypes);
     std::memcpy(primitiveTypes, cts.primitiveTypes, sizeof(Bool) * numPrimitiveTypes);
-
-}
-
-Bool jbi::CanonicalTypeSet::operator < (const CanonicalTypeSet& cts) {
-
-    for (U8 i = 0; i < numDerivedTypes; i++) {
-
-        if (derivedTypes[i] < cts.derivedTypes[i]) return true;
-        if (cts.derivedTypes[i] < derivedTypes[i]) return false;
-
-    }
-
-    for (U8 i = 0; i < numPrimitiveTypes; i++) {
-
-        if (primitiveTypes[i] < cts.primitiveTypes[i]) return true;
-        if (primitiveTypes[i] > cts.primitiveTypes[i]) return false;
-
-    }
-
-    return false;
 
 }
 
@@ -267,13 +288,15 @@ void jbi::CanonicalTypeSet::intersect(Type t) {
 
     if (tClass == Type::SET) { intersect(*getKeyFromValue(vkMap_SET, t.getID())); return; }
 
-    if (tClass == Type::PRIMITIVE) { 
-        
-        if (tID != Type::PRIMITIVE) for (U8 i = 0; i < numPrimitiveTypes; i++) primitiveTypes[i] = 
-            (i == t.getID() - firstPrimitive)
-                ? primitiveTypes[i]
-                : false
-            ;
+    if (tClass == Type::PRIMITIVE) {
+
+        if (tID == Type::PRIMITIVE) return;
+
+        auto i = t.getID() - firstPrimitive;
+        bool primVal = primitiveTypes[i];
+
+        std::memset(primitiveTypes, false, sizeof(Bool) * numPrimitiveTypes);
+        primitiveTypes[i] = primVal;
         
         return;
         
@@ -295,7 +318,7 @@ void jbi::CanonicalTypeSet::intersect(const CanonicalTypeSet& cts) {
 void jbi::CanonicalTypeSet::negate() {
 
     for (U8 i = 0; i < numDerivedTypes; i++) derivedTypes[i] = 
-        (derivedTypes[i] == Type::NOTHING) 
+        (derivedTypes[i].is(Type::NOTHING)) 
             ? firstDerivedTypeClass + i 
             : derivedTypes[i].Not()
         ;
@@ -306,7 +329,7 @@ void jbi::CanonicalTypeSet::negate() {
 
 Type jbi::CanonicalTypeSet::convertToType() {
 
-    ID tID = Type::NOTHING;
+    Type singletonType;
 
     Bool couldBeAnything = true;
     Bool couldBeAbstractPrimitive = true;
@@ -316,7 +339,7 @@ Type jbi::CanonicalTypeSet::convertToType() {
 
         if (primitiveTypes[i]) {
 
-            tID = firstPrimitive + i;
+            singletonType = firstPrimitive + i;
             numOptions++;
 
         }
@@ -332,18 +355,25 @@ Type jbi::CanonicalTypeSet::convertToType() {
 
     for (U8 i = 0; i < numDerivedTypes; i++) {
 
-        auto curID = derivedTypes[i].getID();
+        auto curType = derivedTypes[i];
 
-        if (curID == Type::NOTHING) couldBeAnything = false;
+        if (curType.is(Type::NOTHING)) couldBeAnything = false;
 
         else {
 
-            tID = firstDerivedTypeClass + i;
+            Type tID = firstDerivedTypeClass + i;
 
             couldBeAbstractPrimitive = false;
             numOptions++;
 
-            if (curID != tID) couldBeAnything = false;
+            if (tID.is(curType)) singletonType = tID;
+
+            else {
+
+                singletonType = curType;
+                couldBeAnything = false;
+
+            }
 
         }
 
@@ -351,10 +381,29 @@ Type jbi::CanonicalTypeSet::convertToType() {
 
     if (couldBeAnything) return Type::ANYTHING;
     if (couldBeAbstractPrimitive) return Type::PRIMITIVE;
-    if (numOptions == 0) return Type::NOTHING;
-    if (numOptions == 1) return tID;
+    if (numOptions < 2) return singletonType;
 
     return Type::Set(*this);
+
+}
+
+Bool jbi::operator < (const CanonicalTypeSet& lh, const CanonicalTypeSet& rh) {
+
+    for (U8 i = 0; i < CanonicalTypeSet::numDerivedTypes; i++) {
+
+        if (lh.derivedTypes[i] < rh.derivedTypes[i]) return true;
+        if (rh.derivedTypes[i] < lh.derivedTypes[i]) return false;
+
+    }
+
+    for (U8 i = 0; i < numPrimitiveTypes; i++) {
+
+        if (lh.primitiveTypes[i] < rh.primitiveTypes[i]) return true;
+        if (lh.primitiveTypes[i] > rh.primitiveTypes[i]) return false;
+
+    }
+
+    return false;
 
 }
 
@@ -364,10 +413,12 @@ Type::Type() { }
 \
 case Type::TheType: \
     \
-    if (!getKeyFromValue(vkMap_##TheType, identifier)) throw Error(Error::INVALID_TYPE_ID); \
+    if (identifier != TheType && !getKeyFromValue(vkMap_##TheType, identifier)) throw Error(Error::INVALID_TYPE_ID); \
     break;
 
 Type::Type(ID identifier) : identifier(identifier) {
+
+    if (identifier == SET) identifier = ANYTHING;
     
     determineClass();
 
@@ -387,7 +438,14 @@ Type::Type(ID identifier) : identifier(identifier) {
 
 }
 
-Type Type::Tuple(const List& tl) { return Type(getValueFromKey(kvMap_TUPLE, vkMap_TUPLE, nextFreeID_TUPLE, tl)); }
+Type Type::Tuple(const List& tl) { 
+    
+    jbi::TupleSet ts;
+    ts.insertElement(tl);
+
+    return Type(getValueFromKey(kvMap_TUPLE, vkMap_TUPLE, nextFreeID_TUPLE, ts));
+    
+}
 
 Type Type::Pointer(Type t) { return Type(getValueFromKey(kvMap_POINTER, vkMap_POINTER, nextFreeID_POINTER, t.getID())); }
 
@@ -427,13 +485,18 @@ Type Type::And(Type t1, Type t2) { return t1.And(t2); }
 
 Type Type::Not(Type t) { return t.Not(); }
 
-const Type::List& Type::members() const {
+Type Type::getTupleElement(jitbox::U32 idx) const {
 
 #ifdef JITBOX_DEBUG
     if (typeClass != TUPLE) throw Error(Error::TYPE_GETTER_MISMATCH);
 #endif
 
-    return *getKeyFromValue(vkMap_TUPLE, identifier);
+    const auto& ts = *getKeyFromValue(vkMap_TUPLE, identifier);
+
+    Type t;
+    for (const auto& el : ts.elements) t = t.Or(jbi::TupleSet::getTupleElement(el, idx));
+
+    return t;
 
 }
 
@@ -466,8 +529,6 @@ const Signature& Type::getSignature() const {
     return *getKeyFromValue(vkMap_FUNCTION, identifier);
 
 }
-
-
 
 Type Type::Or(Type t) {
 
@@ -556,9 +617,9 @@ I32 Type::numBytes() const {
 
     if (typeClass == ARRAY) return -1;
 
-    if (typeClass == STRUCTURE || typeClass == FUNCTION) {
+    if (typeClass == FUNCTION) {
 
-        auto& sig = (typeClass == STRUCTURE) ? getSignature() : getSignature();
+        auto& sig = getSignature();
         jitbox::I32 b = 0;
 
         for (jitbox::I32 k = 0; k < sig.argTypes.size(); k++) b += sig.argTypes[k].numBytes();
@@ -634,23 +695,11 @@ String Type::toString(jitbox::U8 alignment) const {
     
 }
 
-Bool jitbox::operator == (const Type& lh, ID rh) { return lh.getID() == rh; }
-
-Bool jitbox::operator == (const Type& lh, const Type& rh) { return lh.getID() == rh.getID(); }
-
-Bool jitbox::operator == (ID lh, const Type& rh) { return lh == rh.getID(); }
-
-Bool jitbox::operator != (const Type& lh, ID rh) { return lh.getID() != rh; }
-
-Bool jitbox::operator != (const Type& lh, const Type& rh) { return lh.getID() != rh.getID(); }
-
-Bool jitbox::operator != (ID lh, const Type& rh) { return lh != rh.getID(); }
-
 Bool jitbox::operator < (const Type& lh, const Type& rh) { return lh.getID() < rh.getID(); }
 
 Bool Constant::operator == (const Constant& ctc) {
 
-    if (type != ctc.type) return false;
+    if (type.getID() != ctc.type.getID()) return false;
 
     auto bw = Type(type).numBytes();
 
@@ -693,16 +742,15 @@ String Constant::toString(U8) const {
 
 }
 
-inline Bool Signature::operator < (const Signature& rh) const {
-     
-    if (identifier < rh.identifier) return true;
-    if (identifier > rh.identifier) return false;
-    if (returnType.getID() < rh.returnType.getID()) return true;
-    if (returnType.getID() > rh.returnType.getID()) return false;
+Signature::Signature(Type argumentTypes, Type returnType) : argumentTypes(argumentTypes), returnType(returnType) {
 
-    return argTypes < rh.argTypes;
+#ifdef JITBOX_DEBUG
+    if (argumentTypes.getClass() != Type::TUPLE) throw Error(Error::INVALID_SIGNATURE_ARGUMENT);
+#endif
 
 }
+
+Signature::Signature(const Type::List& argumentTypes, Type returnType) : argumentTypes(Type::Tuple(argumentTypes)), returnType(returnType) { }
 
 String Signature::toString(U8 alignment) const {
 
@@ -716,6 +764,15 @@ String Signature::toString(U8 alignment) const {
     s += Type(returnType).print(alignment + 1, false);
 
     return s;
+
+}
+
+Bool jitbox::operator < (const Signature& lh, const Signature& rh) {
+     
+    if (lh.argumentTypes < rh.argumentTypes) return true;
+    if (rh.argumentTypes < lh.argumentTypes) return false;
+
+    return lh.returnType < rh.returnType;
 
 }
 
